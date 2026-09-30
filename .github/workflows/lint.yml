@@ -1,0 +1,38 @@
+name: Code Quality & Linting
+
+on:
+    push:
+        branches: [ main, develop ]
+    pull_request:
+        branches: [ main ] 
+
+jobs:
+    lint:
+        runs-on: ubuntu-latest
+        
+        steps:
+        - name: Checkout code
+          uses: actions/checkout@v4
+
+        - name: Set up Python
+          uses: actions/setup-python@v5
+          with:
+            python-version: "3.12"
+        
+        - name: Install Linting Tools
+          run: |
+            python -m pip install --upgrade pip
+            pip install flake8 black bandit
+
+        - name: Check Formatting with Black
+          run: |
+            black --check .
+
+        - name: Lint with Flake8
+          run: |
+            flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+            flake8 . --count --exit-zero --max-complexity=10 --max-line-length=88 --statistics
+
+        - name: Security Scan with Bandit
+          run: |
+            bandit -r src/ api/ -ll

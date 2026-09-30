@@ -1,0 +1,37 @@
+name: HIDS Continuous Integration
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        if [ -f requirements/base.txt ]; then pip install -r requirements/base.txt; fi
+        if [ -f requirements/dev.txt ]; then pip install -r requirements/dev.txt; fi
+
+    - name: Run Unit and Integration Tests
+      env:
+        HIDS_MODEL_PATH: "models/baseline_ae.keras"
+        HIDS_SCALER_PATH: "models/scaler.pkl"
+        ENV: "testing"
+      run: |
+        pytest tests/ --doctest-modules --junitxml=junit/test-results.xml

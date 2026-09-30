@@ -1,0 +1,9 @@
+detection_params:
+  threshold: 0.60
+  calibration_stats:
+    mean: 0.513997
+    std: 0.021
+    p95: 0.55
+    p99: 0.58
+    k: 3.0
+    n_samples: 6000
