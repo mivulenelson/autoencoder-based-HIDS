@@ -1,0 +1,41 @@
+{
+  "threshold": 0.36431708869061324,
+  "general_test_set": {
+    "label": "General Test Set (All Protocols)",
+    "confusion_matrix": [
+      [
+        0,
+        3000
+      ],
+      [
+        0,
+        3000
+      ]
+    ],
+    "precision": 0.5,
+    "recall": 1.0,
+    "f1": 0.6666666666666666,
+    "accuracy": 0.5,
+    "fpr": 1.0,
+    "roc_auc": 0.5383127777777778
+  },
+  "encrypted_test_set": {
+    "label": "Encrypted-Only Test Set (TLS/HTTPS)",
+    "confusion_matrix": [
+      [
+        0,
+        1500
+      ],
+      [
+        0,
+        739
+      ]
+    ],
+    "precision": 0.33005806163465834,
+    "recall": 1.0,
+    "f1": 0.49630624580255206,
+    "accuracy": 0.33005806163465834,
+    "fpr": 1.0,
+    "roc_auc": 0.3860387911592241
+  }
+}

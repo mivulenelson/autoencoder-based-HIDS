@@ -1,0 +1,40 @@
+# ── AUTOENCODER-HIDS  |  Backend — SLIM (no TF/keras/scipy/pandas) ────────────
+#
+# TensorFlow, Keras, scipy, pandas, scikit-learn, h5py, numpy are NOT here.
+# They are provided from the host's existing Python environment via the
+# host_packages bind mount defined in docker-compose.yml.
+# This cuts the backend image from ~950 MB to ~220 MB.
+
+# Web framework
+fastapi==0.136.1
+uvicorn==0.46.0
+starlette==1.0.0
+python-dotenv==1.2.2
+
+# Data validation
+pydantic==2.13.4
+pydantic_core==2.46.4
+annotated-types==0.7.0
+
+# Database
+SQLAlchemy==2.0.49
+greenlet==3.5.0
+
+# Packet capture
+scapy==2.7.0
+
+# Config & utilities
+PyYAML==6.0.3
+psutil==7.2.2
+requests==2.33.1
+
+# HTTP internals
+anyio==4.13.0
+certifi==2026.4.22
+charset-normalizer==3.4.7
+click==8.3.3
+h11==0.16.0
+idna==3.13
+typing_extensions==4.15.0
+packaging==26.2
+urllib3==2.6.3

@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Autoencoder Host-Based IDS for Encrypted Network Traffic</title>
+<style>
+:root{--bg:#0b1a2b;--card:#12283f;--tx:#eaf2fa;--mu:#9db3c8;--ac:#2dd4bf;--ac2:#60a5fa;--bd:#22405c;--warn:#fbbf24}
+@media (prefers-color-scheme:light){:root:not([data-theme="dark"]){--bg:#f4f8fc;--card:#fff;--tx:#0b1a2b;--mu:#4b6379;--ac:#0d9488;--ac2:#2563eb;--bd:#d3e0ec;--warn:#b45309}}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--tx);font-family:"Segoe UI",system-ui,-apple-system,Helvetica,Arial,sans-serif;display:flex;flex-direction:column;overflow:hidden;padding-top:env(safe-area-inset-top,0px)}
+#stage{flex:1;position:relative;min-height:0}
+.s{position:absolute;inset:0;padding:clamp(18px,4vw,56px);display:none;flex-direction:column;justify-content:center;overflow-y:auto;animation:in .35s ease}
+.s.on{display:flex}
+@keyframes in{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}
+.k{color:var(--ac);font-size:clamp(11px,1.3vw,14px);letter-spacing:.14em;text-transform:uppercase;font-weight:700;margin-bottom:6px}
+h1{font-size:clamp(24px,4.2vw,50px);line-height:1.15;margin:0 0 16px;max-width:24ch}
+h2{font-size:clamp(22px,3.3vw,38px);margin:0 0 18px;line-height:1.15}
+h2:after{content:"";display:block;width:56px;height:4px;border-radius:2px;background:linear-gradient(90deg,var(--ac),var(--ac2));margin-top:10px}
+ul{list-style:none;padding:0;margin:0;display:grid;gap:10px}
+li{background:var(--card);border:1px solid var(--bd);border-left:4px solid var(--ac);border-radius:10px;padding:12px 16px;font-size:clamp(14px,1.7vw,20px);line-height:1.4}
+li b{color:var(--ac)}
+.meta{color:var(--mu);font-size:clamp(14px,1.8vw,21px);line-height:1.7}.meta b{color:var(--tx)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+.c{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:16px}
+.c .n{font-size:clamp(26px,3.6vw,44px);font-weight:800;color:var(--ac);line-height:1.1}
+.c h3{margin:0 0 4px;font-size:clamp(15px,1.8vw,20px)}
+.c p,.c .l{margin:0;color:var(--mu);font-size:clamp(12.5px,1.4vw,16px);line-height:1.45}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:center}
+@media(max-width:800px){.two{grid-template-columns:1fr}}
+img{max-width:100%;max-height:62vh;border-radius:10px;border:1px solid var(--bd);background:#fff;display:block;margin:0 auto}
+.cap{color:var(--mu);font-size:13px;text-align:center;margin-top:6px}
+.note{color:var(--mu);margin-top:14px;font-size:clamp(12.5px,1.4vw,16px)}
+table{border-collapse:collapse;width:100%;font-size:clamp(11.5px,1.35vw,16px)}
+th,td{border:1px solid var(--bd);padding:8px 10px;text-align:left;vertical-align:top}
+th{background:var(--card);color:var(--ac)}td:last-child{color:var(--ac);font-weight:600}
+.wrap{overflow-x:auto}
+.net{display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap;margin:6px 0 14px}
+.net span{background:var(--card);border:1px solid var(--ac);border-radius:8px;padding:10px 14px;font-weight:700;font-size:clamp(13px,1.6vw,18px);text-align:center}
+.net span small{display:block;color:var(--mu);font-weight:400;font-size:.7em}
+.net i{color:var(--ac);font-style:normal}
+#bar{display:flex;align-items:center;gap:12px;padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--bd);background:var(--card)}
+#pg{flex:1;height:4px;background:var(--bd);border-radius:2px;overflow:hidden}
+#pg div{height:100%;width:0;background:linear-gradient(90deg,var(--ac),var(--ac2));transition:width .3s}
+button{background:transparent;color:var(--tx);border:1px solid var(--bd);border-radius:8px;padding:8px 16px;font-size:15px;cursor:pointer}
+button:hover{border-color:var(--ac);color:var(--ac)}
+#ct{color:var(--mu);font-size:14px;min-width:54px;text-align:center}
+</style></head>
+<body>
+<div id="stage"></div>
+<div id="bar"><button id="pv" aria-label="Previous">←</button><span id="ct"></span><div id="pg"><div></div></div><button id="fs" aria-label="Fullscreen">⛶</button><button id="nx" aria-label="Next">→</button></div>
+<script>
+var L=function(a){return'<ul>'+a.map(function(x){return'<li>'+x+'</li>'}).join('')+'</ul>'};
+var C=function(a){return'<div class="grid">'+a.map(function(x){return'<div class="c"><h3>'+x[0]+'</h3><p>'+x[1]+'</p></div>'}).join('')+'</div>'};
+var N=function(a){return'<div class="grid">'+a.map(function(x){return'<div class="c"><div class="n">'+x[0]+'</div><div class="l">'+x[1]+'</div></div>'}).join('')+'</div>'};
+var I=function(f,c){return'<img src="assets/'+f+'.jpg" alt="'+c+'"><div class="cap">'+c+'</div>'};
+var P=function(t,a){return'<div class="two"><div>'+t+'</div><div>'+a+'</div></div>'};
+var F=function(a){return'<div class="net">'+a.map(function(x){return'<span>'+x[0]+(x[1]?'<small>'+x[1]+'</small>':'')+'</span>'}).join('<i>→</i>')+'</div>'};
+var S=[
+'<div class="k">Bachelor of Computer Security &amp; Forensics · UTAMU</div><h1>An Autoencoder Host-Based Intrusion Detection System for Encrypted Network Traffic</h1><div class="meta" style="margin-bottom:12px">Using Flow-Based Behavioral Features</div><div class="meta"><b>Authors:</b> Nelson Mivule &amp; Erecho Jonathan<br><b>Supervisor:</b> Mr. Senfuka Huzaifah<br><b>School of Computing and Engineering</b> · September 2026</div>',
+['Introduction &amp; Background',L(['Encryption (TLS, HTTPS, VPN) protects data but <b>hides packet content</b> from DPI tools.','Signature-based IDS are ineffective against encrypted and zero-day attacks.','Decrypting traffic for inspection raises privacy, legal-compliance and performance concerns.','<b>Our idea:</b> analyze behavioral metadata (flow dynamics), not payloads.'])],
+['Problem Statement',L(['Traditional DPI can\'t inspect encrypted traffic without decrypting it first.','Privacy and detection are at odds: no reliable privacy-preserving way to detect emerging threats.','<b>Our answer:</b> a non-intrusive, containerized, host-based IDS using unsupervised autoencoders and flow metadata.'])],
+['Project Objectives',C([['General objective','Design and implement a standalone, containerized HIDS using unsupervised autoencoders to detect threats in encrypted traffic.'],['1 · Feature extraction','Capture session metadata and timing features without decrypting payloads.'],['2 · Autoencoder','Model normal traffic baselines; detect anomalies via reconstruction error.'],['3 · Deployment','FastAPI + Docker + SQLite for robust forensic logging.'],['4 · GUI','PySide6 interface for live monitoring, alerts and analyst feedback.']])],
+['Research Gap &amp; Comparison','<div class="wrap"><table><tr><th>Tool type</th><th>Limitation</th><th>Our system</th></tr><tr><td>Signature-based (Snort, Suricata)</td><td>Blind to zero-day; high decryption overhead</td><td>Proactive: reconstruction-error detection</td></tr><tr><td>Anomaly-based (Zeek)</td><td>Complex manual scripting; rules-heavy</td><td>Learns a normal-behavior manifold</td></tr><tr><td>Host-based (OSSEC)</td><td>Blind to encrypted flows</td><td>Analyzes host flow metadata (IAT, burstiness)</td></tr><tr><td>Hybrid (Cisco Firepower)</td><td>Licensing and hardware cost; black-box</td><td>Open and lightweight (Python, FastAPI, PySide6)</td></tr></table></div>'],
+['Methodology Overview',C([['Flow-based features','Scapy captures IPv4 packets and reassembles bidirectional 5-tuple flows.'],['22-D vectors','Timing, volume, rate, burstiness, session and protocol-flag metrics (L3/L4 headers only).'],['Anomaly detection','Autoencoder trained on benign traffic only; alert when MSE exceeds a calibrated threshold.'],['Analyst feedback','TP/FP labels drive incremental fine-tuning and threshold recalibration.'],['12-week plan','Literature review → model training → GUI &amp; database → testing and report.']])],
+['System Architecture',P(L(['<b>Tier 1</b> Data acquisition &amp; preprocessing (Scapy)','<b>Tier 2</b> AI detection engine (TensorFlow/Keras)','<b>Tier 3</b> Data persistence &amp; feedback (SQLite)','<b>Tier 4</b> Presentation layer (PySide6 GUI)','Containerized with Docker Compose'])+'',I('architecture','Four-tier architecture (Figure 1 of the report)'))],
+['22-Dimensional Behavioral Features',N([['6','Timing: flow duration, inter-arrival time stats'],['5','Volume: packet length stats, total bytes'],['2','Rate: packets/s, bytes/s'],['2','Burstiness: length variance, burst ratio'],['3','Session: active-time ratio, packet count, unique TTLs'],['4','Protocol: TTL mean, TCP-flag ratio, UDP/TCP flags']])+'<div class="note">Only Layer 3/4 headers are used, so payloads are never read. Features are Min-Max scaled to [0, 1].</div>'],
+['Autoencoder Model',F([['Input','22'],['Dense','16'],['Dense','8'],['Latent','4'],['Dense','8'],['Dense','16'],['Output','22']])+L(['Trained on <b>benign traffic only</b> (ISCX VPN-nonVPN); MSE reconstruction loss, learning rate 1e-3.','Batch normalization and Dropout (0.1) prevent over-fitting.','Alert threshold <b>τ = μ + 2σ</b> of benign reconstruction error.'])],
+['Training &amp; Calibration Evidence','<div class="two"><div>'+I('threshold','Threshold calibration: τ = μ + 2σ ≈ 0.364')+'</div><div>'+I('loss','Training vs. validation loss: stable convergence')+'</div></div>'],
+['Deployment &amp; Feedback Loop',C([['Docker Compose','Backend (FastAPI) and dashboard (PySide6) containers; NET_ADMIN for capture; persistent volumes.'],['SQLite forensics DB','Flows, feature vectors, anomaly scores and alert logs.'],['Feedback handler','Analysts flag false positives; the service fine-tunes the AE and updates the threshold.'],['Async design','Producer-consumer queue and worker threads keep capture and inference off the UI thread.']])],
+['Real-Time Monitoring Dashboard',P(L(['Live anomaly-score curve against threshold τ','Alert center and 22-feature forensic inspector','Analyst verdict: false positive / true positive','Ingestion, model analysis, reports and settings tabs'])+'',I('dashboard','HIDS Sentinel console (PySide6)'))],
+['Testing &amp; Validation Results',N([['97.3%','Detection rate (known &amp; zero-day)'],['2.1%','False positive rate'],['96.8%','Precision'],['0.21 s','Avg. inference latency per flow']])+'<div class="note">Benchmarks: CIC-IDS2017 and ISCX VPN-nonVPN. Random Forest / SVM baselines typically report 89–94%. Security tests: 95.8% on simulated zero-day, 97.2% on protocol fuzzing, ~90% under mimicry attacks.</div>'],
+['Findings &amp; Challenges',P('<div class="k">Findings</div>'+L(['High zero-day detection without labeled data','Live telemetry improves analyst awareness','Docker gives reproducible cross-platform runs','Feedback loop enables threshold recalibration']),'<div class="k">Challenges</div>'+L(['Dependency management in containers','High-frequency packet ingestion (spikes above 10,000 pkt/s)','Sub-second inference latency','Unsupervised threshold calibration; unseen protocols']))],
+['Recommendations &amp; Future Work',C([['Concept-drift detection','Automated retraining for TLS 1.3 / QUIC shifts.'],['Multi-node sensors','One dashboard managing distributed hosts.'],['Federated learning','Cloud telemetry warehouse without sharing payloads.'],['Auto-remediation','Firewall rules or interface isolation on high-severity alerts.'],['Hardware acceleration','GPU/TPU/NPU for ultra-high throughput.'],['Explainable AI','Show which features drive a high MSE.']])],
+['Conclusion',L(['Delivered a <b>privacy-preserving</b> IDS for encrypted traffic (TLS 1.3, QUIC) with no payload decryption.','Combines autoencoder anomaly detection, Docker containerization, SQLite forensics and a real-time GUI.','All stated objectives met; limitations are single-host scope and public-dataset evaluation.','A foundation for scalable, adaptive, host-based security.'])],
+'<div class="k">Thank you</div><h1>Questions?</h1><div class="meta"><b>Datasets:</b> CIC-IDS2017, ISCX VPN-nonVPN<br><b>Tools:</b> Python, TensorFlow/Keras, Scapy, FastAPI, SQLite, PySide6, Docker<br><br>Thanks to our supervisor Mr. Senfuka Huzaifah, the School of Computing and Engineering, and UTAMU.<br><b>Nelson Mivule</b> · <b>Erecho Jonathan</b></div>'
+];
+var st=document.getElementById('stage'),i=0;
+S.forEach(function(x,n){var d=document.createElement('section');d.className='s';d.innerHTML=typeof x==='string'?x:'<div class="k">'+String(n+1).padStart(2,'0')+'</div><h2>'+x[0]+'</h2>'+x[1];st.appendChild(d)});
+var el=st.children;
+function go(n){i=Math.max(0,Math.min(S.length-1,n));for(var j=0;j<el.length;j++)el[j].classList.toggle('on',j===i);document.getElementById('ct').textContent=(i+1)+' / '+S.length;document.querySelector('#pg div').style.width=((i+1)/S.length*100)+'%';try{history.replaceState(null,'','#'+(i+1))}catch(e){}}
+document.getElementById('pv').onclick=function(){go(i-1)};
+document.getElementById('nx').onclick=function(){go(i+1)};
+function fs(){var d=document.documentElement;document.fullscreenElement?document.exitFullscreen():d.requestFullscreen&&d.requestFullscreen()}
+document.getElementById('fs').onclick=fs;
+document.addEventListener('keydown',function(e){if(e.key==='ArrowRight'||e.key===' '||e.key==='PageDown')go(i+1);if(e.key==='ArrowLeft'||e.key==='PageUp')go(i-1);if(e.key==='f'||e.key==='F')fs()});
+var sx=0;st.addEventListener('touchstart',function(e){sx=e.touches[0].clientX});
+st.addEventListener('touchend',function(e){var d=e.changedTouches[0].clientX-sx;if(Math.abs(d)>60)go(i+(d<0?1:-1))});
+go((parseInt(location.hash.slice(1))||1)-1);
+</script>
+</body></html>

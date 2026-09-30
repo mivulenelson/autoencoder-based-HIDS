@@ -1,0 +1,161 @@
+# Remove named volumes at the top if no longer used for models/configs/logs
+volumes:
+  hids_db:
+
+networks:
+  hids_net:
+    driver: bridge
+
+services:
+
+  # ── FastAPI Backend ─────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    container_name: hids_backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL:          "sqlite:////app/db/hids_forensics.db"
+      HIDS_MODEL_PATH:       "/app/models/baseline_ae.keras"
+      HIDS_SCALER_PATH:      "/app/models/scaler.pkl"
+      HIDS_THRESHOLD_CONFIG: "/app/configs/threshold.yaml"
+      API_HOST:              "0.0.0.0"
+      API_PORT:              "9000"
+      WORKERS:               "1"
+      LOG_LEVEL:             "${LOG_LEVEL:-INFO}"
+      PYTHONUNBUFFERED:      "1"
+      PYTHONPATH:            "/app/host_packages:/app"
+    volumes:
+      - hids_db:/app/db
+      - ../models:/app/models
+      - ../configs:/app/configs
+      - ../logs:/app/logs
+      - "${HOST_SITE_PACKAGES}:/app/host_packages:ro"
+    network_mode: host
+    user: root
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/ready || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    profiles:
+      - backend
+      - gui
+
+  # ── PySide6 Dashboard ───────────────────────────────────────────────────────
+  dashboard:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dashboard
+    container_name: hids_dashboard
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      DATABASE_URL:     "sqlite:////app/db/hids_forensics.db"
+      HIDS_API_URL:     "http://127.0.0.1:9000"
+      HIDS_MODEL_PATH:  "/app/models/baseline_ae.keras"
+      GUI_THEME:        "${GUI_THEME:-dark}"
+      QT_QPA_PLATFORM:  "xcb"
+      QT_LOGGING_RULES: "*.debug=false"
+      DISPLAY:          "${DISPLAY:-:0}"
+      PYTHONUNBUFFERED: "1"
+      API_HOST:         "127.0.0.1"
+      API_PORT:         "9000"
+      PYTHONPATH:       "/app/host_packages:/app"
+      QTWEBENGINE_DISABLE_SANDBOX: "1"
+      QTWEBENGINE_CHROMIUM_FLAGS: "--no-sandbox --disable-gpu --disable-software-rasterizer"
+    volumes:
+      - hids_db:/app/db
+      - ../models:/app/models
+      - ../docs:/app/docs  # <--- Added to make docs accessible in production gui build[cite: 11]
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - "${HOST_SITE_PACKAGES}:/app/host_packages:ro"
+    network_mode: host
+    ipc: host
+    user: root
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    security_opt:
+      - seccomp:unconfined
+    profiles:
+      - gui
+
+  # ── Backend dev (live source mount) ────────────────────────────────────────
+  backend_dev:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    container_name: hids_backend_dev
+    restart: unless-stopped
+    environment:
+      DATABASE_URL:          "sqlite:////app/db/hids_forensics.db"
+      HIDS_MODEL_PATH:       "/app/models/baseline_ae.keras"
+      HIDS_SCALER_PATH:      "/app/models/scaler.pkl"
+      HIDS_THRESHOLD_CONFIG: "/app/configs/threshold.yaml"
+      API_HOST:              "0.0.0.0"
+      API_PORT:              "9000"
+      WORKERS:               "1"
+      LOG_LEVEL:             "DEBUG"
+      PYTHONUNBUFFERED:      "1"
+      PYTHONPATH:            "/app/host_packages:/app"
+    volumes:
+      - hids_db:/app/db
+      - ../models:/app/models
+      - ../configs:/app/configs
+      - ../logs:/app/logs
+      - ..:/app
+      - "${HOST_SITE_PACKAGES}:/app/host_packages:ro"
+    network_mode: host
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9000/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    profiles:
+      - dev
+
+  # ── Dashboard dev (live source mount) ──────────────────────────────────────
+  dashboard_dev:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.dashboard
+    container_name: hids_dashboard_dev
+    restart: unless-stopped
+    depends_on:
+      - backend_dev
+    environment:
+      DATABASE_URL:     "sqlite:////app/db/hids_forensics.db"
+      HIDS_API_URL:     "http://localhost:9000"
+      HIDS_MODEL_PATH:  "/app/models/baseline_ae.keras"
+      GUI_THEME:        "${GUI_THEME:-dark}"
+      QT_QPA_PLATFORM:  "xcb"
+      DISPLAY:          "$DISPLAY"
+      PYTHONUNBUFFERED: "1"
+      PYTHONPATH:       "/app/host_packages:/app"
+      QTWEBENGINE_DISABLE_SANDBOX: "1"
+      QTWEBENGINE_CHROMIUM_FLAGS: "--no-sandbox --disable-gpu --disable-software-rasterizer"
+    volumes:
+      - hids_db:/app/db
+      - ../models:/app/models
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ..:/app
+      - "${HOST_SITE_PACKAGES}:/app/host_packages:ro"
+      - ../docs:/app/docs  # <--- Ensures live-synced docs folder is present[cite: 11]
+    network_mode: host
+    ipc: host
+    security_opt:
+      - seccomp:unconfined
+    profiles:
+      - dev

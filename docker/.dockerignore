@@ -1,0 +1,69 @@
+# ── Version control ───────────────────────────────────────────────────────────
+.git
+.gitignore
+.github
+
+# ── Python artefacts ──────────────────────────────────────────────────────────
+__pycache__
+/api/__pycache__
+/api/routes/__pycache__
+/app/__pycache__
+/app/components/__pycache__
+/app/pages/__pycache__
+/app/utils/__pycache__
+/app/*.txt
+/src/database/__pycache__
+/src/detection/__pycache__
+/src/ingestion/__pycache__
+/src/services/__pycache__
+
+*.py[cod]
+*.pyo
+.pytest_cache
+.mypy_cache
+.ruff_cache
+*.egg-info
+dist
+build
+.eggs
+
+# ── Virtual environments ───────────────────────────────────────────────────────
+.venv
+venv
+env
+.env          # keep secrets off the image
+.env.*        # same for all env variants
+
+# ── Jupyter / notebooks ───────────────────────────────────────────────────────
+*.ipynb
+.ipynb_checkpoints
+
+# ── Datasets (large — mount as volume or download in container) ───────────────
+data/raw/
+data/processed/
+experiments/datasets/CIC-IDS2017/
+experiments/datasets/nonVPN
+experiments/datasets/VPN
+*.csv
+*.parquet
+*.pcap
+*.pcapng
+experiments/figures/eda/*.png
+experiments/figures/training/*.png
+
+# ── Model artefacts (mounted as volume — not baked into the image) ────────────
+# Comment out these lines if you WANT to bake weights into the image
+# (e.g. for a self-contained inference image)
+models/
+*.keras
+*.h5
+configs/threshold.yaml
+
+# ── Logs & temp ───────────────────────────────────────────────────────────────
+logs/
+*.log
+*.tmp
+
+# ── OS noise ──────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db

@@ -1,0 +1,55 @@
+FROM python:3.12-slim
+LABEL maintainer="Nelson & Jonathan / UTAMU HIDS Project"
+WORKDIR /app
+
+RUN printf 'Acquire::http::Timeout "30";\nAcquire::Retries "3";\n' \
+    > /etc/apt/apt.conf.d/99timeout \
+ && apt-get update -qq \
+ && apt-get install -y -q --no-install-recommends \
+        libpcap0.8 \
+        libgomp1 \
+        libcap2-bin \
+        curl \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
+
+RUN mkdir -p /root/.config/pip \
+ && printf '[global]\ntimeout = 120\nretries = 5\n' > /root/.config/pip/pip.conf
+
+COPY docker/requirements.backend.txt .
+RUN pip install --upgrade pip \
+ && pip install --no-cache-dir --timeout 120 --retries 5 -r requirements.backend.txt
+
+ARG CACHEBUST=1
+COPY api/            ./api/
+COPY src/            ./src/
+COPY docker/entrypoint.py  ./entrypoint.py
+
+RUN groupadd -r hids && useradd -r -g hids -d /app -s /sbin/nologin hids \
+ && mkdir -p /app/db /app/models /app/configs /app/logs \
+ && chown -R hids:hids /app
+
+RUN setcap cap_net_raw,cap_net_admin+eip /usr/local/bin/python3.12 2>/dev/null || true
+
+# Running as root for scapy raw socket access (cap_add: NET_RAW)
+
+VOLUME ["/app/db", "/app/models", "/app/configs", "/app/logs"]
+
+ENV DATABASE_URL="sqlite:////app/db/hids_forensics.db" \
+    HIDS_MODEL_PATH="/app/models/baseline_ae.keras" \
+    HIDS_SCALER_PATH="/app/models/scaler.pkl" \
+    HIDS_THRESHOLD_CONFIG="/app/configs/threshold.yaml" \
+    API_HOST="0.0.0.0" \
+    API_PORT="9000" \
+    WORKERS="1" \
+    LOG_LEVEL="INFO" \
+    PYTHONUNBUFFERED="1" \
+    PYTHONDONTWRITEBYTECODE="1" \
+    PYTHONPATH="/app/host_packages:/app"
+
+EXPOSE 9000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -sf http://localhost:9000/ready || exit 1
+
+ENTRYPOINT ["python", "-m", "entrypoint"]
