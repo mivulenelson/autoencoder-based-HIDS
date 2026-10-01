@@ -1,16 +1,12 @@
-# app/pages/realtime_monitor.py
-"""
-Real-Time Network Intrusion Detection Console — HIDS Sentinel v2.0[cite: 10]
-Enterprise network monitoring dashboard featuring live telemetry feeds, 
-22-metric feature vector visualization, and streaming anomaly logging[cite: 10].
-"""
-
+# app/pages/realtime_monitor.py[cite: 4]
 import os
+import threading
+import requests
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
 from dotenv import load_dotenv
-from PySide6.QtCore import QThread, Qt, QTimer, Slot
+from PySide6.QtCore import QThread, Qt, QTimer, Slot, QMetaObject, Q_ARG
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QFrame, QHBoxLayout, QHeaderView, QLabel, QScrollArea, QTableWidget,
@@ -23,7 +19,7 @@ from src.services.monitor_service import MonitorService
 from theme import (
     C_ACCENT, C_ACCENT_DIM, C_AMBER, C_AMBER_DIM,
     C_BG_APP, C_BG_PANEL, C_GREEN, C_GREEN_DIM,
-    C_RED, C_RED_DIM, C_TEXT_DIM, C_TEXT_PRI,
+    C_RED, C_TEXT_DIM, C_TEXT_PRI,
     C_TEXT_SEC, FONT_MONO, FONT_SIZE_XS, QSS_BASE, QSS_TABLE,
 )
 
@@ -64,16 +60,6 @@ def _build_glow_separator() -> QFrame:
     return sep
 
 
-class InterfaceRestartWorker(QThread):
-    def __init__(self, service: MonitorService, interface_name: str, parent=None):
-        super().__init__(parent)
-        self._service = service
-        self._interface_name = interface_name
-
-    def run(self) -> None:
-        self._service.restart_with_new_interface(self._interface_name)
-
-
 class RealTimeMonitor(QWidget):
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -84,13 +70,12 @@ class RealTimeMonitor(QWidget):
         self.MAX_ROWS = 100
         self.alert_timestamps: List[datetime] = []
         self.live_threshold: float = _FALLBACK_THRESHOLD
-        self._restarter_thread: Optional[InterfaceRestartWorker] = None
+        self.api_url = os.getenv("HIDS_API_URL", "http://127.0.0.1:9000")
 
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 20, 24, 20)
         root.setSpacing(16)
 
-        # Header Bar
         hdr = QHBoxLayout()
         hdr.setSpacing(12)
 
@@ -124,7 +109,6 @@ class RealTimeMonitor(QWidget):
 
         root.addWidget(_build_glow_separator())
 
-        # KPI Cards Row
         kpi_row = QHBoxLayout()
         kpi_row.setSpacing(12)
 
@@ -138,11 +122,9 @@ class RealTimeMonitor(QWidget):
         kpi_row.addWidget(self.status_card, stretch=1)
         root.addLayout(kpi_row)
 
-        # Signal Chart
         self.chart = LiveSignalChart()
         root.addWidget(self.chart, stretch=3)
 
-        # Feature Vector Strip
         root.addWidget(_create_section_label("Live Flow Feature Vector — 22 Behavioral Metrics"))
 
         feat_scroll = QScrollArea()
@@ -168,7 +150,6 @@ class RealTimeMonitor(QWidget):
         feat_scroll.setWidget(feat_inner)
         root.addWidget(feat_scroll)
 
-        # Anomaly Log Table
         root.addWidget(_create_section_label("Active Flow Log & Anomaly Console"))
 
         self.table = QTableWidget(0, 8)
@@ -179,7 +160,6 @@ class RealTimeMonitor(QWidget):
         self._configure_table_formatting(self.table)
         root.addWidget(self.table, stretch=2)
 
-        # Wiring Signals
         self.service.new_metrics.connect(self.chart.update_signal)
         self.service.new_metrics.connect(self._on_new_mse)
         self.service.new_alert.connect(self._on_alert)
@@ -191,6 +171,24 @@ class RealTimeMonitor(QWidget):
         self._rate_timer = QTimer(self)
         self._rate_timer.timeout.connect(self._refresh_rate)
         self._rate_timer.start(1000)
+
+        # Synchronize threshold with backend on startup[cite: 1, 4]
+        self._fetch_backend_threshold()
+
+    def _fetch_backend_threshold(self):
+        def _fetch():
+            try:
+                res = requests.get(f"{self.api_url}/ready", timeout=2)
+                if res.status_code == 200:
+                    data = res.json()
+                    tau = float(data.get("threshold", _FALLBACK_THRESHOLD))
+                    QMetaObject.invokeMethod(
+                        self, "set_live_threshold",
+                        Qt.QueuedConnection, Q_ARG(float, tau)
+                    )
+            except Exception as exc:
+                pass
+        threading.Thread(target=_fetch, daemon=True).start()
 
     def _configure_table_formatting(self, table: QTableWidget) -> None:
         hh = table.horizontalHeader()
@@ -218,6 +216,7 @@ class RealTimeMonitor(QWidget):
         table.verticalHeader().setDefaultSectionSize(32)
         table.setAlternatingRowColors(True)
 
+    @Slot(float)
     def set_live_threshold(self, value: float) -> None:
         if value is None or value <= 0:
             return
@@ -286,7 +285,6 @@ class RealTimeMonitor(QWidget):
         is_encrypted = bool(data.get("is_encrypted", False))
         mse = float(data.get("reconstruction_error") or data.get("score", 0))
 
-        # Classify Severity and Verdict dynamically for all traffic levels
         if mse >= self.live_threshold:
             diff = mse - self.live_threshold
             sev_str = "Critical" if diff > self.live_threshold * 2.0 else "High"

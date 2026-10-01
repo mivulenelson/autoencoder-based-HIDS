@@ -1,12 +1,4 @@
-# app/pages/settings.py
-"""
-System Configuration Console — HIDS Sentinel v2.0
-
-Enterprise PySide6 Settings View featuring modern card-based architecture,
-responsive viewport scrolling, granular threshold controls, and real-time
-configuration commit feedback with asynchronous backend synchronization.
-"""
-
+# app/pages/settings.py[cite: 3]
 import os
 import threading
 import logging
@@ -21,23 +13,13 @@ from theme import (
     C_BG_APP, C_BG_PANEL, C_BG_SURFACE, C_BORDER, C_BORDER_LT,
     C_TEXT_PRI, C_TEXT_SEC, C_TEXT_DIM,
     C_ACCENT, C_ACCENT_LT, C_ACCENT_DIM, C_VIOLET,
-    C_GREEN, C_AMBER,
-    FONT_MONO, FONT_SIZE_XS, FONT_SIZE_SM, FONT_SIZE_MD, FONT_SIZE_LG,
+    C_GREEN,
+    FONT_MONO, FONT_SIZE_XS, FONT_SIZE_SM, FONT_SIZE_MD,
     QSS_BASE, QSS_BTN_SUCCESS
 )
 
 logger = logging.getLogger("HIDS_Settings")
 
-FEATURE_NAMES = [
-    "flow_duration", "fwd_iat_mean", "fwd_iat_std", "fwd_iat_min", "fwd_iat_max",
-    "fwd_iat_total", "fwd_pkt_len_mean", "fwd_pkt_len_std", "fwd_pkt_len_min",
-    "fwd_pkt_len_max", "total_fwd_bytes", "flow_pkts_per_sec", "flow_bytes_per_sec",
-    "pkt_len_variance", "burst_ratio", "active_time_ratio", "pkt_count",
-    "unique_ttl_count", "ttl_mean", "tcp_flag_ratio", "has_udp", "has_tcp",
-]
-
-# ── Complete dark-mode QSS for every input widget type ────────────────────────
-# Applied directly on the widget so it wins over any platform/native theme.
 _QSS_COMBO = lambda accent: f"""
     QComboBox {{
         background-color: {C_BG_SURFACE};
@@ -49,13 +31,8 @@ _QSS_COMBO = lambda accent: f"""
         padding: 6px 10px;
         min-height: 28px;
     }}
-    QComboBox:hover {{
-        border-color: {accent};
-    }}
-    QComboBox:focus {{
-        border-color: {accent};
-        border-width: 1px;
-    }}
+    QComboBox:hover {{ border-color: {accent}; }}
+    QComboBox:focus {{ border-color: {accent}; border-width: 1px; }}
     QComboBox::drop-down {{
         subcontrol-origin: padding;
         subcontrol-position: top right;
@@ -66,34 +43,20 @@ _QSS_COMBO = lambda accent: f"""
         background: {C_BG_PANEL};
     }}
     QComboBox::down-arrow {{
-        width: 10px;
-        height: 10px;
-        image: none;
-        border-left:  4px solid transparent;
+        width: 10px; height: 10px; image: none;
+        border-left: 4px solid transparent;
         border-right: 4px solid transparent;
-        border-top:   5px solid {C_ACCENT_LT};
+        border-top: 5px solid {C_ACCENT_LT};
     }}
     QComboBox QAbstractItemView {{
-        background-color: {C_BG_PANEL};
-        color: {C_TEXT_PRI};
-        font-family: {FONT_MONO};
-        font-size: {FONT_SIZE_SM};
-        border: 1px solid {C_BORDER_LT};
-        border-radius: 4px;
+        background-color: {C_BG_PANEL}; color: {C_TEXT_PRI};
+        font-family: {FONT_MONO}; font-size: {FONT_SIZE_SM};
+        border: 1px solid {C_BORDER_LT}; border-radius: 4px;
         selection-background-color: {C_ACCENT_DIM};
-        selection-color: {C_ACCENT_LT};
-        outline: 0px;
-        padding: 4px;
+        selection-color: {C_ACCENT_LT}; outline: 0px; padding: 4px;
     }}
-    QComboBox QAbstractItemView::item {{
-        min-height: 26px;
-        padding: 4px 8px;
-        border-radius: 3px;
-    }}
-    QComboBox QAbstractItemView::item:hover {{
-        background-color: {C_ACCENT_DIM};
-        color: {C_ACCENT_LT};
-    }}
+    QComboBox QAbstractItemView::item {{ min-height: 26px; padding: 4px 8px; border-radius: 3px; }}
+    QComboBox QAbstractItemView::item:hover {{ background-color: {C_ACCENT_DIM}; color: {C_ACCENT_LT}; }}
 """
 
 _QSS_SPINBOX = f"""
@@ -108,46 +71,23 @@ _QSS_SPINBOX = f"""
         padding: 5px 8px;
         min-height: 28px;
     }}
-    QDoubleSpinBox:focus {{
-        border-color: {C_ACCENT};
-    }}
-    QDoubleSpinBox::up-button,
-    QDoubleSpinBox::down-button {{
-        width: 0px;
-        height: 0px;
-    }}
+    QDoubleSpinBox:focus {{ border-color: {C_ACCENT}; }}
+    QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {{ width: 0px; height: 0px; }}
 """
 
 _QSS_SLIDER = f"""
     QSlider::groove:horizontal {{
-        border: 1px solid {C_BORDER_LT};
-        height: 6px;
-        background: {C_BG_SURFACE};
-        border-radius: 3px;
+        border: 1px solid {C_BORDER_LT}; height: 6px; background: {C_BG_SURFACE}; border-radius: 3px;
     }}
     QSlider::sub-page:horizontal {{
-        background: qlineargradient(
-            x1:0, y1:0, x2:1, y2:0,
-            stop:0 {C_VIOLET}, stop:1 {C_ACCENT}
-        );
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {C_VIOLET}, stop:1 {C_ACCENT});
         border-radius: 3px;
     }}
-    QSlider::add-page:horizontal {{
-        background: {C_BG_SURFACE};
-        border-radius: 3px;
-    }}
+    QSlider::add-page:horizontal {{ background: {C_BG_SURFACE}; border-radius: 3px; }}
     QSlider::handle:horizontal {{
-        background: {C_ACCENT_LT};
-        border: 2px solid {C_BG_APP};
-        width: 16px;
-        height: 16px;
-        margin: -5px 0;
-        border-radius: 8px;
+        background: {C_ACCENT_LT}; border: 2px solid {C_BG_APP}; width: 16px; height: 16px; margin: -5px 0; border-radius: 8px;
     }}
-    QSlider::handle:horizontal:hover {{
-        background: {C_ACCENT};
-        border-color: {C_BG_PANEL};
-    }}
+    QSlider::handle:horizontal:hover {{ background: {C_ACCENT}; border-color: {C_BG_PANEL}; }}
 """
 
 
@@ -163,8 +103,26 @@ class Settings(QWidget):
 
         self._setup_ui()
         self._connect_signals()
+        self._fetch_backend_threshold()
 
-    # ── UI construction ────────────────────────────────────────────────────────
+    def _fetch_backend_threshold(self):
+        """Fetch active threshold from backend /ready endpoint on startup[cite: 1, 3]."""
+        def _fetch():
+            try:
+                res = requests.get(f"{self.api_url}/ready", timeout=2)
+                if res.status_code == 200:
+                    data = res.json()
+                    tau = float(data.get("threshold", 0.43))
+                    # Update UI in main thread if needed or via signals
+                    from PySide6.QtCore import QMetaObject, Q_ARG
+                    QMetaObject.invokeMethod(
+                        self.thresh_spinbox, "setValue",
+                        Qt.QueuedConnection, Q_ARG(float, tau)
+                    )
+            except Exception as exc:
+                logger.debug(f"Could not fetch initial threshold from backend: {exc}")
+
+        threading.Thread(target=_fetch, daemon=True).start()
 
     def _setup_ui(self):
         self.setStyleSheet(QSS_BASE)
@@ -179,12 +137,8 @@ class Settings(QWidget):
         scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll_area.setStyleSheet(f"""
             QScrollArea {{ background: {C_BG_APP}; border: none; }}
-            QScrollBar:vertical {{
-                background: {C_BG_SURFACE}; width: 5px; border-radius: 2px;
-            }}
-            QScrollBar::handle:vertical {{
-                background: {C_BORDER_LT}; border-radius: 2px; min-height: 20px;
-            }}
+            QScrollBar:vertical {{ background: {C_BG_SURFACE}; width: 5px; border-radius: 2px; }}
+            QScrollBar::handle:vertical {{ background: {C_BORDER_LT}; border-radius: 2px; min-height: 20px; }}
             QScrollBar::handle:vertical:hover {{ background: {C_ACCENT}; }}
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0px; }}
         """)
@@ -251,7 +205,6 @@ class Settings(QWidget):
         form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
         form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
 
-        # Theme selector
         self.theme_sel = QComboBox()
         self.theme_sel.addItems(["Dark", "Light", "System"])
         self.theme_sel.setStyleSheet(_QSS_COMBO(C_ACCENT_LT))
@@ -259,7 +212,6 @@ class Settings(QWidget):
         if idx >= 0:
             self.theme_sel.setCurrentIndex(idx)
 
-        # Refresh rate selector
         self.refresh_rate = QComboBox()
         self.refresh_rate.addItems(["500 ms", "1000 ms", "2000 ms", "5000 ms"])
         self.refresh_rate.setCurrentIndex(1)
@@ -282,7 +234,6 @@ class Settings(QWidget):
         thresh_form.setLabelAlignment(Qt.AlignRight | Qt.AlignVCenter)
         thresh_form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
 
-        # ── Threshold row ──────────────────────────────────────────────────
         slider_row = QHBoxLayout()
         slider_row.setSpacing(12)
 
@@ -308,7 +259,6 @@ class Settings(QWidget):
             self._form_label("Anomaly Threshold (μ + k·σ)"), slider_row
         )
 
-        # ── Threshold hint ─────────────────────────────────────────────────
         hint = QLabel(
             "Flows with reconstruction MAE above this value are flagged as ANOMALY. "
             "Lower values increase sensitivity; raise to reduce false positives."
@@ -321,7 +271,6 @@ class Settings(QWidget):
         )
         thresh_form.addRow(QLabel(""), hint)
 
-        # ── Active model ───────────────────────────────────────────────────
         model_frame = QFrame()
         model_frame.setStyleSheet(
             f"background: {C_BG_SURFACE}; border: 1px solid {C_BORDER}; "
@@ -365,7 +314,6 @@ class Settings(QWidget):
         self.root.addWidget(card)
 
     def _build_system_info_section(self):
-        """Read-only system info row — paths and runtime env."""
         self.root.addWidget(self._section_label("Runtime Environment"))
         card, card_layout = self._card(C_TEXT_DIM)
 
@@ -375,7 +323,7 @@ class Settings(QWidget):
         entries = [
             ("API ENDPOINT",   os.getenv("HIDS_API_URL",           "http://127.0.0.1:9000")),
             ("MODEL PATH",     os.getenv("HIDS_MODEL_PATH",         "/app/models/baseline_ae.keras")),
-            ("DATABASE",       os.getenv("DATABASE_URL",            "sqlite:////app/db/hids_forensics.db")),
+            ("DATABASE",       os.getenv("DATABASE_URL",            "sqlite////app/db/hids_forensics.db")),
             ("THRESHOLD CFG",  os.getenv("HIDS_THRESHOLD_CONFIG",   "/app/configs/threshold.yaml")),
         ]
 
@@ -433,8 +381,6 @@ class Settings(QWidget):
         footer.addWidget(self.save_btn)
         self.root.addLayout(footer)
 
-    # ── Widget helpers ─────────────────────────────────────────────────────────
-
     def _card(self, accent: str) -> tuple[QFrame, QVBoxLayout]:
         card = QFrame()
         card.setObjectName("SettingsCard")
@@ -479,8 +425,6 @@ class Settings(QWidget):
         lbl.setMinimumWidth(200)
         return lbl
 
-    # ── Signal wiring ──────────────────────────────────────────────────────────
-
     def _connect_signals(self):
         self.theme_sel.currentTextChanged.connect(self._on_theme_changed)
         self.thresh_slider.valueChanged.connect(self._sync_slider_to_spinbox)
@@ -514,6 +458,10 @@ class Settings(QWidget):
         payload = {"theme": theme, "threshold": tau, "refresh_rate": refresh}
         self.settings_saved.emit(payload)
 
+        # Instantly update the active RealTimeMonitor reference in memory[cite: 3]
+        if self.main_monitor_page and hasattr(self.main_monitor_page, "set_live_threshold"):
+            self.main_monitor_page.set_live_threshold(tau)
+
         def _notify():
             try:
                 requests.post(f"{self.api_url}/api/config", json=payload, timeout=3)
@@ -525,7 +473,6 @@ class Settings(QWidget):
 
     @Slot(str)
     def update_theme(self, theme_name: str):
-        """Receive theme updates from the main window dashboard."""
         self.current_theme = theme_name.lower()
         idx = self.theme_sel.findText(self.current_theme.capitalize())
         if idx >= 0:

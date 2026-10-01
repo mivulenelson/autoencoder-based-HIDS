@@ -1,17 +1,4 @@
-# app/dashboard.py
-"""
-Main window shell  —  AUTOENCODER-HIDS Sentinel Console  v2.0 (SOC Operational Edition)
-
-Visual & Architecture Overhaul:
-  - Enterprise SOC Header: Prominent command bar displaying live threat levels, 
-    active interfaces, real-time bandwidth metrics, and anomaly counters.
-  - Tactical Navigation Bar: Pill-style toggle navigation with glowing accent 
-    indicators for fast workspace context switching.
-  - Operational Splitters: Responsive central workstation layout featuring 
-    custom handles for real-time traffic monitoring vs alert triage.
-  - Status & Telemetry Strip: Low-profile system status bar tracking autoencoder 
-    model stats, feature ratios, and dynamic timestamps.
-"""
+# dashboard.py[cite: 2]
 import os
 import sys
 from datetime import datetime, timezone
@@ -23,12 +10,12 @@ if project_root not in sys.path:
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QStackedWidget, QToolBar, QSplitter,
     QWidget, QHBoxLayout, QVBoxLayout, QLabel, QSizePolicy, QPushButton,
-    QFrame, QGraphicsDropShadowEffect
+    QFrame
 )
-from PySide6.QtGui import QAction, QFont, QActionGroup, QColor
-from PySide6.QtCore import QCoreApplication, Qt, Slot, QTimer, QSize
+from PySide6.QtGui import QAction, QActionGroup, QColor
+from PySide6.QtCore import Qt, Slot, QTimer, QSize, QCoreApplication
 from dotenv import load_dotenv
-from PySide6.QtGui import QColor, QPalette
+from PySide6.QtGui import QPalette
 
 from pages.realtime_monitor import RealTimeMonitor
 from pages.alert_history    import AlertHistory
@@ -43,12 +30,11 @@ from src.database.models     import Base
 from src.database.crud       import create_alert
 
 from theme import (
-    C_BG_APP, C_BG_PANEL, C_BG_SURFACE, C_BG_HOVER, C_BORDER, C_BORDER_LT,
+    C_BG_APP, C_BG_PANEL, C_BG_SURFACE, C_BORDER, C_BORDER_LT,
     C_TEXT_PRI, C_TEXT_SEC, C_TEXT_DIM,
-    C_ACCENT, C_ACCENT_LT, C_ACCENT_DIM, C_VIOLET, C_VIOLET_DIM,
-    C_GREEN, C_GREEN_DIM, C_AMBER, C_AMBER_DIM, C_RED, C_RED_DIM,
-    FONT_MONO, FONT_UI,
-    FONT_SIZE_XS, FONT_SIZE_SM, FONT_SIZE_MD, FONT_SIZE_LG, FONT_SIZE_XL,
+    C_ACCENT, C_ACCENT_LT, C_ACCENT_DIM, C_VIOLET,
+    C_GREEN, C_GREEN_DIM, C_AMBER, C_RED,
+    FONT_MONO, FONT_SIZE_XS,
     QSS_BASE,
 )
 
@@ -79,7 +65,6 @@ NAV_NODES = [
 
 
 class SOCHeaderMetric(QFrame):
-    """Compact metric display for top SOC status bar."""
     def __init__(self, label: str, value: str, val_color: str = C_ACCENT_LT, parent=None):
         super().__init__(parent)
         self.setStyleSheet(
@@ -114,14 +99,12 @@ class SentinelDashboard(QMainWindow):
         self.setMinimumSize(1280, 720)
         self.setStyleSheet(QSS_BASE)
 
-        # ── Database schema sync ──────────────────────────────────────────────
         try:
             Base.metadata.create_all(bind=engine)
             print("SQLite Core: SOC Engine Schema synced successfully.")
         except Exception as e:
             print(f"Database Connection Failure: {e}")
 
-        # ── Instantiate Operational Pages ─────────────────────────────────────
         self.monitor_page   = RealTimeMonitor()
         self.alerts_page    = AlertHistory()
         self.ingestion_page = IngestionPage()
@@ -133,7 +116,6 @@ class SentinelDashboard(QMainWindow):
             monitor_ref=self.monitor_page,
         )
 
-        # ── Central Split Console View ────────────────────────────────────────
         self.operations_split_widget = QWidget()
         self.operations_split_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         
@@ -159,17 +141,15 @@ class SentinelDashboard(QMainWindow):
         self.ops_splitter.setStretchFactor(1, 45)
         split_layout.addWidget(self.ops_splitter)
 
-        # ── Main Stack Routing ────────────────────────────────────────────────
         self.main_stack = QStackedWidget()
         self.main_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.main_stack.addWidget(self.operations_split_widget)  # 0 Console Grid
-        self.main_stack.addWidget(self.ingestion_page)           # 1 Ingestion
-        self.main_stack.addWidget(self.analysis_page)            # 2 Analysis
-        self.main_stack.addWidget(self.settings_page)            # 3 Settings
-        self.main_stack.addWidget(self.reports_page)             # 4 Reports
-        self.main_stack.addWidget(self.docs_page)                # 5 Docs
+        self.main_stack.addWidget(self.operations_split_widget)
+        self.main_stack.addWidget(self.ingestion_page)
+        self.main_stack.addWidget(self.analysis_page)
+        self.main_stack.addWidget(self.settings_page)
+        self.main_stack.addWidget(self.reports_page)
+        self.main_stack.addWidget(self.docs_page)
 
-        # ── Layout Assembly ───────────────────────────────────────────────────
         central = QWidget()
         cl = QVBoxLayout(central)
         cl.setContentsMargins(0, 0, 0, 0)
@@ -178,7 +158,6 @@ class SentinelDashboard(QMainWindow):
         cl.addWidget(self._build_status_strip())
         self.setCentralWidget(central)
 
-        # ── Signals & Inter-component Telemetry ───────────────────────────────
         self.monitor_page.service.new_alert.connect(self._route_alert_to_history)
         self.monitor_page.service.new_alert.connect(self._update_soc_header_counters)
 
@@ -198,7 +177,6 @@ class SentinelDashboard(QMainWindow):
             self.analysis_page.increment_pending_counter
         )
 
-        # ── Build Navigation Toolbar & Dynamic Metrics ────────────────────────
         self._total_incidents_count = 0
         self._build_nav()
         self._apply_soc_theme(THEME_PREFERENCE)
@@ -207,7 +185,6 @@ class SentinelDashboard(QMainWindow):
 
     @Slot(str)
     def _handle_interface_changed(self, interface_name: str = None):
-        """Safely handle interface restart requests from settings or ingestion pages."""
         try:
             if hasattr(self.monitor_page, "restart_interface"):
                 if interface_name:
@@ -216,12 +193,9 @@ class SentinelDashboard(QMainWindow):
                     self.monitor_page.restart_interface()
             elif hasattr(self.monitor_page, "_restart_interface"):
                 self.monitor_page._restart_interface()
-            else:
-                print("[WARNING] RealTimeMonitor does not implement an interface restart method.")
         except Exception as e:
             print(f"Interface restart error: {e}")
 
-    # ── SOC Command Navigation Header ─────────────────────────────────────────
     def _build_nav(self):
         self.nav_toolbar = QToolBar("SOC Command Bar")
         self.nav_toolbar.setObjectName("SOCNavToolbar")
@@ -229,7 +203,6 @@ class SentinelDashboard(QMainWindow):
         self.nav_toolbar.setAllowedAreas(Qt.TopToolBarArea)
         self.nav_toolbar.setIconSize(QSize(0, 0))
         
-        # --- Explicit Palette & Background Fix to override global QSS ---
         self.nav_toolbar.setAutoFillBackground(True)
         pal = self.nav_toolbar.palette()
         pal.setColor(QPalette.Window, QColor(C_BG_PANEL))
@@ -237,7 +210,6 @@ class SentinelDashboard(QMainWindow):
         
         self.addToolBar(self.nav_toolbar)
 
-        # Branding Unit
         brand_wrap = QWidget()
         brand_wrap.setStyleSheet("background: transparent;")
         bw_lay = QHBoxLayout(brand_wrap)
@@ -267,7 +239,6 @@ class SentinelDashboard(QMainWindow):
         bw_lay.addLayout(bw_col)
         self.nav_toolbar.addWidget(brand_wrap)
 
-        # Vertical Divider
         div1 = QFrame()
         div1.setFrameShape(QFrame.VLine)
         div1.setFixedWidth(1)
@@ -275,7 +246,6 @@ class SentinelDashboard(QMainWindow):
         div1.setStyleSheet(f"background: {C_BORDER}; border: none;")
         self.nav_toolbar.addWidget(div1)
 
-        # Navigation Action Buttons
         self.nav_group = QActionGroup(self)
         self.nav_group.setExclusive(True)
         self.nav_actions: dict = {}
@@ -290,13 +260,11 @@ class SentinelDashboard(QMainWindow):
             self.nav_toolbar.addAction(action)
             self.nav_actions[idx] = action
 
-        # Flexible Center Spacer
         spacer = QWidget()
         spacer.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         spacer.setStyleSheet("background: transparent;")
         self.nav_toolbar.addWidget(spacer)
 
-        # Live SOC Operational Metrics Header Group
         self.header_metrics_wrap = QWidget()
         self.header_metrics_wrap.setStyleSheet("background: transparent;")
         hm_lay = QHBoxLayout(self.header_metrics_wrap)
@@ -313,7 +281,6 @@ class SentinelDashboard(QMainWindow):
 
         self.nav_toolbar.addWidget(self.header_metrics_wrap)
 
-        # Engine Status Indicator
         self.engine_dot = QLabel("● ENGINE ACTIVE")
         self.engine_dot.setStyleSheet(
             f"color: {C_GREEN}; font-size: {FONT_SIZE_XS}; font-weight: 800; "
@@ -344,7 +311,6 @@ class SentinelDashboard(QMainWindow):
         else:
             self.m_alerts_count.set_value(f"{self._total_incidents_count} DETECTED", C_AMBER)
 
-    # ── Operational Bottom Status Strip ───────────────────────────────────────
     def _build_status_strip(self) -> QWidget:
         strip = QWidget()
         strip.setFixedHeight(34)
@@ -375,11 +341,10 @@ class SentinelDashboard(QMainWindow):
             lay.addWidget(v_lbl)
             return w
 
-        # Model Metadata Telemetry Chips
         row.addWidget(chip("MODEL:", MODEL_NAME, C_ACCENT_LT))
         row.addWidget(chip("ARCH:", MODEL_ARCH, C_TEXT_SEC))
         row.addWidget(chip("VECTORS:", f"{FEATURE_COUNT}/{FEATURE_COUNT} FEATURES", C_GREEN))
-        row.addWidget(chip("THRESHOLD τ:", "0.4313", C_ACCENT_LT))
+        row.addWidget(chip("THRESHOLD τ:", f"{getattr(self.monitor_page, 'live_threshold', 0.4313):.4f}", C_ACCENT_LT))
 
         vsep = QFrame()
         vsep.setFrameShape(QFrame.VLine)
@@ -388,7 +353,6 @@ class SentinelDashboard(QMainWindow):
         row.addWidget(vsep)
         row.addStretch()
 
-        # Action Buttons
         ghost_ss = f"""
             QPushButton {{
                 color: {C_TEXT_SEC};
@@ -406,10 +370,6 @@ class SentinelDashboard(QMainWindow):
                 color: {C_ACCENT_LT};
                 border-color: {C_ACCENT};
                 background: {C_ACCENT_DIM};
-            }}
-            QPushButton:pressed {{
-                color: {C_ACCENT};
-                background: {C_BG_APP};
             }}
         """
 
@@ -429,7 +389,6 @@ class SentinelDashboard(QMainWindow):
         )
         row.addWidget(self.btn_open_analysis)
 
-        # Dynamic Dual Clocks (Local & UTC)
         self.status_clock = QLabel()
         self.status_clock.setStyleSheet(
             f"color: {C_TEXT_SEC}; font-size: {FONT_SIZE_XS}; "
@@ -449,7 +408,6 @@ class SentinelDashboard(QMainWindow):
         now_utc = datetime.now(timezone.utc).strftime("%H:%M:%S")
         self.status_clock.setText(f"LOCAL: {now_local}  |  UTC: {now_utc} Z")
 
-    # ── Resize / Split Behavior ───────────────────────────────────────────────
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._enforce_split_ratio()
@@ -480,7 +438,7 @@ class SentinelDashboard(QMainWindow):
                 nav_btn_ss = f"""
                     QToolButton {{
                         color: {C_TEXT_SEC};
-                        font-size: {FONT_SIZE_SM};
+                        font-size: 11px;
                         font-weight: 700;
                         font-family: {FONT_MONO};
                         letter-spacing: 0.6px;
@@ -518,11 +476,9 @@ class SentinelDashboard(QMainWindow):
                 pal = self.nav_toolbar.palette()
                 pal.setColor(QPalette.Window, QColor(panel_bg))
                 self.nav_toolbar.setPalette(pal)
-
         except Exception as e:
             print(f"Theme Engine Warning: {e}")
 
-    # ── Database & Alert Persistence Pipeline ─────────────────────────────────
     @Slot(dict)
     def _route_alert_to_history(self, data: dict):
         try:
@@ -601,7 +557,6 @@ class SentinelDashboard(QMainWindow):
                     protocol=protocol,
                     is_encrypted=is_encrypted,
                 )
-
         except Exception as err:
             print(f"Alert routing error: {err}")
 
@@ -617,10 +572,9 @@ if __name__ == "__main__":
     if not QCoreApplication.testAttribute(Qt.AA_ShareOpenGLContexts):
         QCoreApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True)
     
-    # --- Force Chromium/QtWebEngine flags for Docker environments ---
     sys.argv.append("--no-sandbox")
     sys.argv.append("--disable-dev-shm-usage")
-    sys.argv.append("--disable-gpu")  # Forces software rasterization instead of missing GPU context
+    sys.argv.append("--disable-gpu")
     sys.argv.append("--disable-software-rasterizer")
 
     app = QApplication(sys.argv)

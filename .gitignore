@@ -63,11 +63,6 @@ db/*.sqlite3
 *.sqlite
 *.sqlite3
 
-
-
-# Logs directory
-logs
-
 # ==========================================
 # IDEs, Editors & Operating Systems
 # ==========================================

@@ -1,3 +1,4 @@
+# main.py[cite: 1]
 import os
 import time
 import json
@@ -6,9 +7,10 @@ import logging
 from logging.handlers import RotatingFileHandler
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
+from pydantic import BaseModel, Field
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, Depends
+from fastapi import FastAPI, Request, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
@@ -21,8 +23,8 @@ from src.services.feedback_loop import FeedbackLoopService
 # ── Safe JSON Response for NaN/Inf Support ────────────────────────────────────
 class SafeJSONResponse(JSONResponse):
     """
-    Custom JSONResponse that permits NaN, Infinity, and -Infinity values 
-    to prevent serialization crashes during validation error handling of non-finite inputs.
+    Custom JSONResponse that permits NaN, Infinity, and -Infinity values[cite: 1]
+    to prevent serialization crashes during validation error handling of non-finite inputs[cite: 1].
     """
     def render(self, content: typing.Any) -> bytes:
         return json.dumps(
@@ -44,17 +46,15 @@ def _configure_logging():
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
-    # Rotating file handler — 10 MB per file, keep last 5
     file_handler = RotatingFileHandler(
         filename=os.path.join(log_dir, "hids_api.log"),
-        maxBytes=10 * 1024 * 1024,   # 10 MB
+        maxBytes=10 * 1024 * 1024,
         backupCount=5,
         encoding="utf-8",
     )
     file_handler.setFormatter(log_format)
     file_handler.setLevel(logging.INFO)
 
-    # Console handler
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(log_format)
     console_handler.setLevel(logging.INFO)
@@ -72,37 +72,38 @@ logger = logging.getLogger("HIDS_API")
 # ── Application Lifespan ──────────────────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Runs startup tasks before the app begins accepting requests,
-    and shutdown tasks when the server is stopping.
-    """
-    # Startup 
     logger.info("=" * 60)
     logger.info("HIDS API starting up...")
 
-    # 1. Bootstrap database schema
     try:
         from src.database.connection import create_tables
         create_tables()
-        logger.info("Database schema verified.")
+        logger.info("Database schema verified[cite: 1].")
     except Exception as exc:
         logger.critical(f"Database init failed: {exc}")
         raise
 
-    # 2. Warm the DetectionEvaluator
     try:
-        get_evaluator()
-        logger.info("DetectionEvaluator warmed successfully.")
+        evaluator = get_evaluator()
+        # Attempt loading persisted threshold from YAML if present
+        config_path = os.getenv("HIDS_THRESHOLD_CONFIG", "/app/configs/threshold.yaml")
+        if os.path.exists(config_path):
+            import yaml
+            with open(config_path, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f)
+                if cfg and "threshold" in cfg:
+                    evaluator.threshold = float(cfg["threshold"])
+                    logger.info(f"Loaded persisted threshold from YAML: {evaluator.threshold}")
+        logger.info("DetectionEvaluator warmed successfully[cite: 1].")
     except Exception as exc:
         logger.critical(f"Model warm-up failed: {exc}")
         raise
 
-    logger.info("HIDS API ready — accepting requests.")
+    logger.info("HIDS API ready — accepting requests[cite: 1].")
     logger.info("=" * 60)
 
-    yield   # ── app runs here ──
+    yield
 
-    # Shutdown
     logger.info("HIDS API shutting down.")
 
 
@@ -110,10 +111,9 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="HIDS AI Detection Service",
     description=(
-        "Real-time Autoencoder-based Intrusion Detection API.\n\n"
-        "Accepts 22-feature flow vectors extracted from live network traffic "
-        "and returns anomaly verdicts via MAE reconstruction error analysis.\n\n"
-        "**Project:** An Autoencoder HIDS for Encrypted Network Traffic — UTAMU 2026"
+        "Real-time Autoencoder-based Intrusion Detection API[cite: 1].\n\n"
+        "Accepts 22-feature flow vectors extracted from live network traffic[cite: 1] "
+        "and returns anomaly verdicts via MAE reconstruction error analysis[cite: 1]."
     ),
     version="1.0.0",
     lifespan=lifespan,
@@ -137,16 +137,13 @@ app.add_middleware(
 # ── Request Timing Middleware ─────────────────────────────────────────────────
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
-    """Injects X-Process-Time header and logs all requests for performance audit."""
     start    = time.perf_counter()
     response = await call_next(request)
     elapsed  = time.perf_counter() - start
 
     response.headers["X-Process-Time"] = f"{elapsed * 1000:.2f}ms"
 
-    if request.url.path in ("/health", "/ready"):
-        logger.debug(f"{request.method} {request.url.path} {elapsed*1000:.2f}ms")
-    else:
+    if request.url.path not in ("/health", "/ready"):
         logger.info(
             f"{request.method} {request.url.path} "
             f"status={response.status_code} {elapsed*1000:.2f}ms"
@@ -163,13 +160,11 @@ app.include_router(alerts.router)
 # ── System Endpoints ──────────────────────────────────────────────────────────
 @app.get("/health", tags=["System"], summary="Liveness probe")
 async def health_check():
-    """Liveness probe for container orchestrators (Docker, Kubernetes)."""
     return {"status": "alive", "timestamp": time.time()}
 
 
 @app.get("/ready", tags=["System"], summary="Readiness probe + model evidence")
 async def readiness_check():
-    """Readiness probe — returns 200 only when the DetectionEvaluator is loaded."""
     from api.dependencies import _evaluator
     from fastapi import Response
 
@@ -199,13 +194,51 @@ def read_root():
     return {"status": "healthy", "service": "Autoencoder HIDS API"}
 
 
+class ConfigPayload(BaseModel):
+    theme: str
+    threshold: float = Field(..., ge=0.10, le=2.00)
+    refresh_rate: str
+
+
+@app.post("/api/config", tags=["System"], summary="Update runtime configuration and detection threshold")
+async def update_config(
+    payload: ConfigPayload,
+    evaluator: DetectionEvaluator = Depends(get_evaluator),
+):
+    """
+    Receives configuration updates from the PySide6 settings view[cite: 1],
+    updates the active DetectionEvaluator threshold[cite: 1], and persists changes[cite: 1].
+    """
+    try:
+        evaluator.threshold = payload.threshold
+        
+        config_path = os.getenv("HIDS_THRESHOLD_CONFIG", "/app/configs/threshold.yaml")
+        os.makedirs(os.path.dirname(config_path), exist_ok=True)
+        import yaml
+        cfg_data = {"threshold": payload.threshold}
+        with open(config_path, "w", encoding="utf-8") as f:
+            yaml.dump(cfg_data, f)
+
+        logger.info(f"Configuration updated successfully: threshold={payload.threshold}, theme={payload.theme}[cite: 1]")
+        return {
+            "status": "success", 
+            "detail": "Configuration committed successfully.",
+            "threshold": payload.threshold
+        }
+    except Exception as exc:
+        logger.error(f"Failed to update configuration: {exc}")
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to apply configuration: {str(exc)}"
+        )
+
+
 @app.post("/system/retrain", tags=["System"], summary="Trigger adaptive feedback retraining")
 async def trigger_retraining(
     db:       Session = Depends(get_db),
     evaluator: DetectionEvaluator = Depends(get_evaluator),
     scaler=   Depends(get_scaler),
 ):
-    """Triggers the full adaptive feedback loop cycle."""
     logger.info("POST /system/retrain — starting feedback cycle...")
     result = FeedbackLoopService.run_feedback_cycle(db, scaler, evaluator)
     logger.info(f"Feedback cycle result: {result}")
@@ -218,22 +251,21 @@ async def serve_project_docs():
     if os.path.exists(docs_path):
         with open(docs_path, "r", encoding="utf-8") as f:
             return f.read()
-    return "<html><body><h1>Documentation not found</h1></body></html>"
+    return ""
+
 
 @app.exception_handler(RequestValidationError)
 async def custom_request_validation_handler(request: Request, exc: RequestValidationError):
-    # Ensure all values in error 'ctx' dictionaries are JSON serializable (e.g., convert exceptions to strings)
     errors = []
     for error in exc.errors():
         err_copy = error.copy()
         if "ctx" in err_copy:
             err_copy["ctx"] = {
-                k: str(v) if isinstance(v, Exception) else v 
+                k: str(v) if isinstance(v, Exception) else v
                 for k, v in err_copy["ctx"].items()
             }
         errors.append(err_copy)
 
-    # Then pass the sanitized errors dictionary/list to your SafeJSONResponse
     return SafeJSONResponse(
         status_code=422,
         content={"detail": errors},
