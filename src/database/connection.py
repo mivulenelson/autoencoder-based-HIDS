@@ -1,3 +1,14 @@
+"""
+connection.py — HIDS Sentinel v2.0 database engine / session / migrations
+Place at: src/database/connection.py
+
+SOC ANALYST MAP (22 features):
+  * No feature logic lives here. The 22 features are stored in alerts.flow_features
+    (column already exists, so no migration needed).
+  * Call create_tables() at startup (dashboard.py now does) so older databases get
+    the source_port / dest_port / is_encrypted columns added automatically.
+  * Feature names/order: src/database/feature_schema.py
+"""
 import os
 import logging
 from sqlalchemy import create_engine, event, inspect, text
@@ -47,7 +58,7 @@ def _build_engine():
             pool_recycle=1800,     # recycle connections every 30 min (avoids stale TCP)
             echo=False,
         )
-        logger.info("SQLite engine created.")
+        logger.info("PostgreSQL engine created.")
         return eng
 
 

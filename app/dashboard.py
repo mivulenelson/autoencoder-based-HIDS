@@ -1,5 +1,18 @@
-# dashboard.py[cite: 2]
+# dashboard.py
+"""
+Sentinel Dashboard — HIDS Sentinel v2.0 (main window)
+
+SOC ANALYST MAP (22 features) — how a packet's 22 features are reachable:
+  * Console Grid (left)   : feature strip; click a flow row = pin, double-click = jump to Inspector
+  * Console Grid (right)  : Alert History -> 22-Feature Forensic Inspector (FEAT column = n/22)
+  * Forensic Reports      : Section 4 lists all 22 features for every alert
+  * Status bar "VECTORS"  : live count of features captured for the LAST flow (was a hard-coded 22/22)
+  * Triage Queue button   : jumps to Alert History and selects the newest row
+  * Feature schema        : src/database/feature_schema.py
+"""
+import logging
 import os
+import queue
 import sys
 from datetime import datetime, timezone
 
@@ -13,7 +26,7 @@ from PySide6.QtWidgets import (
     QFrame
 )
 from PySide6.QtGui import QAction, QActionGroup, QColor
-from PySide6.QtCore import Qt, Slot, QTimer, QSize, QCoreApplication
+from PySide6.QtCore import Qt, Slot, QTimer, QSize, QCoreApplication, QThread, Signal
 from dotenv import load_dotenv
 from PySide6.QtGui import QPalette
 
@@ -25,9 +38,12 @@ from pages.analysis         import AnalysisPage
 from pages.reports          import ReportsPage
 from pages.docs             import DocsPage
 
-from src.database.connection import engine, SessionLocal
-from src.database.models     import Base
+from src.database.connection import SessionLocal, create_tables
 from src.database.crud       import create_alert
+from src.database.feature_schema import (
+    FEATURE_COUNT as SCHEMA_FEATURE_COUNT,
+    compute_severity, count_present, extract_features,
+)
 
 from theme import (
     C_BG_APP, C_BG_PANEL, C_BG_SURFACE, C_BORDER, C_BORDER_LT,
@@ -43,7 +59,7 @@ THEME_PREFERENCE = os.getenv("GUI_THEME", "dark").lower()
 
 MODEL_ARCH    = "22 → 16 → 8 → 4 → 8 → 16 → 22"
 MODEL_NAME    = "baseline_ae.keras  v1.0.4"
-FEATURE_COUNT = 22
+FEATURE_COUNT = SCHEMA_FEATURE_COUNT
 
 IDX_CONSOLE   = 0
 IDX_INGESTION = 1
@@ -62,6 +78,94 @@ NAV_NODES = [
     ("Settings",         IDX_SETTINGS,  "⬡", C_ACCENT_LT),
     ("Docs",             IDX_DOCS,      "⬡", C_ACCENT_LT),
 ]
+
+
+logger = logging.getLogger("HIDS_Dashboard")
+
+
+class AlertPersistWorker(QThread):
+    """
+    Saves alerts to the database OFF the UI thread, in batches.
+
+    The UI used to run a full-table lookup plus a commit() for every alert on the
+    GUI thread; a burst of alerts (e.g. after lowering the threshold) froze the
+    window. Now the row appears instantly and its DB id arrives a moment later.
+    """
+    persisted = Signal(str, int)          # row_key, db_id (0 = could not save)
+
+    BATCH = 200
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._q: "queue.Queue" = queue.Queue()      # unbounded: alerts are never dropped
+
+    def submit(self, row_key: str, payload: dict) -> None:
+        self._q.put((row_key, dict(payload)))
+
+    def stop(self) -> None:
+        self._q.put(None)
+        self.wait(5000)
+
+    def run(self) -> None:
+        stop = False
+        while not stop:
+            item = self._q.get()
+            if item is None:
+                break
+            batch = [item]
+            while len(batch) < self.BATCH:
+                try:
+                    nxt = self._q.get_nowait()
+                except queue.Empty:
+                    break
+                if nxt is None:
+                    stop = True
+                    break
+                batch.append(nxt)
+            self._save_batch(batch)
+
+    def _save_batch(self, batch) -> None:
+        db = SessionLocal()
+        try:
+            try:                                     # fast path: ONE commit for the batch
+                ids = [self._save(db, p, commit=False) for _, p in batch]
+                db.commit()
+                for (key, _), db_id in zip(batch, ids):
+                    self.persisted.emit(key, db_id)
+                return
+            except Exception as exc:
+                db.rollback()
+                logger.warning(f"Batch save failed ({exc}); retrying one by one.")
+
+            for key, payload in batch:               # slow path isolates a bad record
+                try:
+                    db_id = self._save(db, payload, commit=True)
+                except Exception as exc:
+                    db.rollback()
+                    logger.warning(f"Alert persist failed: {exc}")
+                    db_id = 0
+                self.persisted.emit(key, db_id)
+        finally:
+            db.close()
+
+    @staticmethod
+    def _save(db, payload: dict, commit: bool = True) -> int:
+        existing = payload.get("id") or payload.get("alert_id")
+        if existing:
+            return int(existing)
+
+        # Did the monitor service already store this flow? Check only the newest rows
+        # (primary-key order, cheap) instead of scanning the whole table by float value.
+        from src.database.models import NetworkAlert
+        from sqlalchemy import desc
+        score = float(payload.get("reconstruction_error") or payload.get("score") or 0.0)
+        src = payload.get("src_ip") or payload.get("source_ip") or "unknown"
+        dst = payload.get("dst_ip") or payload.get("dest_ip") or "unknown"
+        for row in db.query(NetworkAlert).order_by(desc(NetworkAlert.id)).limit(100):
+            if (abs(float(row.reconstruction_error) - score) < 1e-9
+                    and row.source_ip == src and row.dest_ip == dst):
+                return int(row.id)
+        return int(create_alert(db, payload, commit=commit).id)
 
 
 class SOCHeaderMetric(QFrame):
@@ -100,8 +204,10 @@ class SentinelDashboard(QMainWindow):
         self.setStyleSheet(QSS_BASE)
 
         try:
-            Base.metadata.create_all(bind=engine)
-            print("SQLite Core: SOC Engine Schema synced successfully.")
+            # create_tables() = create_all() + lightweight migrations, so older
+            # databases get source_port / dest_port / is_encrypted automatically.
+            create_tables()
+            print("SOC Engine: database schema verified / migrated.")
         except Exception as e:
             print(f"Database Connection Failure: {e}")
 
@@ -158,8 +264,21 @@ class SentinelDashboard(QMainWindow):
         cl.addWidget(self._build_status_strip())
         self.setCentralWidget(central)
 
+        self._persist_worker = AlertPersistWorker(self)
+        self._persist_worker.persisted.connect(self._on_alert_persisted)
+        self._persist_worker.start()
+
+        # Load the newest stored incidents once the window is up (history survives restarts)
+        QTimer.singleShot(0, self.alerts_page.load_recent_from_db)
+
         self.monitor_page.service.new_alert.connect(self._route_alert_to_history)
         self.monitor_page.service.new_alert.connect(self._update_soc_header_counters)
+        # Double-click a flow row in the Console -> open it in the Forensic Inspector
+        self.monitor_page.packet_selected.connect(self._open_in_inspector)
+        # One threshold, everywhere: console -> status bar + Alert History label;
+        # retraining recalibration -> console.
+        self.monitor_page.threshold_changed.connect(self._on_threshold_changed)
+        self.analysis_page.threshold_updated.connect(self.monitor_page.set_live_threshold)
 
         if hasattr(self.ingestion_page, "update_feature_strip"):
             self.monitor_page.service.new_alert.connect(
@@ -300,11 +419,34 @@ class SentinelDashboard(QMainWindow):
             if self.alerts_page.alert_table.rowCount() > 0:
                 self.alerts_page.alert_table.selectRow(0)
 
+    def _score_and_tau(self, data: dict):
+        """MAE score of a flow and the LIVE threshold the console is using."""
+        try:
+            mse = float(data.get("reconstruction_error") or data.get("score")
+                        or data.get("mse_score") or 0.0)
+        except (TypeError, ValueError):
+            mse = 0.0
+        tau = float(getattr(getattr(self, "monitor_page", None), "live_threshold", 0.4313))
+        return mse, tau
+
     @Slot(dict)
     def _update_soc_header_counters(self, alert_data: dict):
+        # Live feature completeness of the last flow (replaces hard-coded 22/22)
+        captured = count_present(extract_features(alert_data))
+        self.chip_vectors_val.setText(f"{captured}/{FEATURE_COUNT} FEATURES (last flow)")
+        self.chip_vectors_val.setStyleSheet(
+            f"color: {C_GREEN if captured == FEATURE_COUNT else C_AMBER}; font-size: {FONT_SIZE_XS}; "
+            f"font-weight: 700; font-family: {FONT_MONO}; background: transparent;"
+        )
+
+        # Only flows ABOVE the threshold are incidents. The severity label the
+        # monitor service attaches to every flow is ignored; score vs tau decides.
+        mse, tau = self._score_and_tau(alert_data)
+        if mse < tau:
+            return
         self._total_incidents_count += 1
-        sev = alert_data.get("severity", "Low")
-        
+        sev = compute_severity(mse, tau)
+
         if sev in ("High", "Critical"):
             self.m_threat_level.set_value("DEFCON 2 / ELEVATED", C_RED)
             self.m_alerts_count.set_value(f"{self._total_incidents_count} HIGH THREATS", C_RED)
@@ -339,12 +481,15 @@ class SentinelDashboard(QMainWindow):
             )
             lay.addWidget(l_lbl)
             lay.addWidget(v_lbl)
-            return w
+            return w, v_lbl
 
-        row.addWidget(chip("MODEL:", MODEL_NAME, C_ACCENT_LT))
-        row.addWidget(chip("ARCH:", MODEL_ARCH, C_TEXT_SEC))
-        row.addWidget(chip("VECTORS:", f"{FEATURE_COUNT}/{FEATURE_COUNT} FEATURES", C_GREEN))
-        row.addWidget(chip("THRESHOLD τ:", f"{getattr(self.monitor_page, 'live_threshold', 0.4313):.4f}", C_ACCENT_LT))
+        w, _ = chip("MODEL:", MODEL_NAME, C_ACCENT_LT);  row.addWidget(w)
+        w, _ = chip("ARCH:", MODEL_ARCH, C_TEXT_SEC);    row.addWidget(w)
+        w, self.chip_vectors_val = chip("VECTORS:", f"schema {FEATURE_COUNT} FEATURES · awaiting flow", C_TEXT_SEC)
+        row.addWidget(w)
+        w, self.chip_tau_val = chip(
+            "THRESHOLD τ:", f"{getattr(self.monitor_page, 'live_threshold', 0.4313):.4f}", C_ACCENT_LT)
+        row.addWidget(w)
 
         vsep = QFrame()
         vsep.setFrameShape(QFrame.VLine)
@@ -407,6 +552,9 @@ class SentinelDashboard(QMainWindow):
         now_local = datetime.now().strftime("%H:%M:%S")
         now_utc = datetime.now(timezone.utc).strftime("%H:%M:%S")
         self.status_clock.setText(f"LOCAL: {now_local}  |  UTC: {now_utc} Z")
+        # keep the τ chip in sync with the backend threshold fetched by the monitor
+        if hasattr(self, "chip_tau_val"):
+            self.chip_tau_val.setText(f"{getattr(self.monitor_page, 'live_threshold', 0.4313):.4f}")
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
@@ -482,83 +630,59 @@ class SentinelDashboard(QMainWindow):
     @Slot(dict)
     def _route_alert_to_history(self, data: dict):
         try:
+            mse, tau = self._score_and_tau(data)
+
+            # Benign flows (MAE below tau) stay in the console's flow log only.
+            if mse < tau:
+                return
+
+            payload = dict(data)
+            # Severity is derived ONLY from score vs threshold (never from the monitor
+            # service's label), and the threshold used is stamped on the alert so the
+            # row stays correct even after the analyst changes tau later.
+            severity = compute_severity(mse, tau)
+            payload["severity"] = severity
+            payload["threshold"] = tau
+            payload["threshold_at_time"] = tau
+
             timestamp    = datetime.now().strftime("%H:%M:%S")
-            src_ip       = data.get("src_ip")   or data.get("source_ip") or "unknown"
-            dst_ip       = data.get("dst_ip")   or data.get("dest_ip")   or "unknown"
-            protocol     = data.get("protocol", "IP")
-            is_encrypted = bool(data.get("is_encrypted", False))
+            src_ip       = payload.get("src_ip") or payload.get("source_ip") or "unknown"
+            dst_ip       = payload.get("dst_ip") or payload.get("dest_ip") or "unknown"
+            protocol     = payload.get("protocol", "IP")
+            is_encrypted = bool(payload.get("is_encrypted", False))
+            alert_id     = payload.get("id") or payload.get("alert_id")
 
-            mse = float(
-                data.get("reconstruction_error")
-                or data.get("score")
-                or data.get("mse_score")
-                or 0.0
+            # Row appears immediately; the database id arrives asynchronously.
+            row_key = self.alerts_page.add_alert(
+                alert_id, timestamp, src_ip, severity, payload,
+                dest_ip=dst_ip, protocol=protocol, is_encrypted=is_encrypted,
             )
-            tau = getattr(
-                getattr(self, "monitor_page", None),
-                "live_threshold",
-                0.4313,
-            )
-            raw_sev = data.get("severity")
-            if raw_sev and str(raw_sev).strip() in ("Low", "Medium", "High", "Critical"):
-                severity = str(raw_sev).strip()
-            else:
-                diff = mse - tau
-                if mse <= tau:
-                    severity = "Low"
-                elif diff > tau * 3.0:
-                    severity = "Critical"
-                elif diff > tau * 1.5:
-                    severity = "High"
-                elif diff > tau * 0.5:
-                    severity = "Medium"
-                else:
-                    severity = "Low"
-
-            alert_id = data.get("id") or data.get("alert_id")
             if not alert_id:
-                db = SessionLocal()
-                try:
-                    from src.database.models import NetworkAlert
-                    from sqlalchemy import desc
-                    score = float(data.get("reconstruction_error") or data.get("score") or 0.0)
-                    row = (db.query(NetworkAlert)
-                             .filter(NetworkAlert.reconstruction_error == score)
-                             .order_by(desc(NetworkAlert.id))
-                             .first())
-                    if row:
-                        alert_id = row.id
-                        data["id"] = alert_id
-                    else:
-                        data_for_db = dict(data)
-                        data_for_db.setdefault("threshold_at_time", tau)
-                        data_for_db.setdefault("threshold", tau)
-                        db_alert = create_alert(db, data_for_db)
-                        alert_id = db_alert.id
-                except Exception as db_err:
-                    db.rollback()
-                    print(f"[WARNING] SOC Alert Lookup: {db_err}")
-                    alert_id = None
-                finally:
-                    db.close()
-
-            if hasattr(self, "alerts_page") and alert_id is not None:
-                self.alerts_page.add_alert(
-                    alert_id, timestamp, src_ip, severity, data,
-                    dest_ip=dst_ip,
-                    protocol=protocol,
-                    is_encrypted=is_encrypted,
-                )
-            elif hasattr(self, "alerts_page"):
-                data["_unpersisted"] = True
-                self.alerts_page.add_alert(
-                    0, timestamp, src_ip, severity, data,
-                    dest_ip=dst_ip,
-                    protocol=protocol,
-                    is_encrypted=is_encrypted,
-                )
+                self._persist_worker.submit(row_key, payload)
         except Exception as err:
             print(f"Alert routing error: {err}")
+
+    @Slot(str, int)
+    def _on_alert_persisted(self, row_key: str, db_id: int) -> None:
+        self.alerts_page.assign_db_id(row_key, db_id or None)
+
+    @Slot(float)
+    def _on_threshold_changed(self, tau: float) -> None:
+        self.chip_tau_val.setText(f"{tau:.4f}")
+        self.alerts_page.set_live_threshold(tau)
+
+    def closeEvent(self, event) -> None:
+        try:
+            self._persist_worker.stop()
+        finally:
+            super().closeEvent(event)
+
+    @Slot(dict)
+    def _open_in_inspector(self, data: dict) -> None:
+        """Console double-click -> show Alert History with this packet's 22 features."""
+        self._go_to_page(IDX_CONSOLE)
+        if not self.alerts_page.select_by_payload(data):
+            print("[INFO] Packet not yet in Alert History; it appears once routed/persisted.")
 
     @Slot(str)
     def apply_theme(self, theme_name: str):

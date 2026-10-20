@@ -1,4 +1,4 @@
-# app/pages/settings.py[cite: 3]
+# app/pages/settings.py
 import os
 import threading
 import logging
@@ -106,7 +106,7 @@ class Settings(QWidget):
         self._fetch_backend_threshold()
 
     def _fetch_backend_threshold(self):
-        """Fetch active threshold from backend /ready endpoint on startup[cite: 1, 3]."""
+        """Fetch active threshold from backend /ready endpoint on startup."""
         def _fetch():
             try:
                 res = requests.get(f"{self.api_url}/ready", timeout=2)
@@ -446,7 +446,7 @@ class Settings(QWidget):
     @Slot(float)
     def _sync_spinbox_to_slider(self, val: float):
         self.thresh_slider.blockSignals(True)
-        self.thresh_slider.setValue(int(val * 100))
+        self.thresh_slider.setValue(int(round(val * 100)))
         self.thresh_slider.blockSignals(False)
 
     @Slot()
@@ -458,7 +458,7 @@ class Settings(QWidget):
         payload = {"theme": theme, "threshold": tau, "refresh_rate": refresh}
         self.settings_saved.emit(payload)
 
-        # Instantly update the active RealTimeMonitor reference in memory[cite: 3]
+        # Instantly update the active RealTimeMonitor reference in memory
         if self.main_monitor_page and hasattr(self.main_monitor_page, "set_live_threshold"):
             self.main_monitor_page.set_live_threshold(tau)
 

@@ -2,13 +2,19 @@
 """
 Forensic Reports & Compliance Exports — HIDS Sentinel v2.0
 
-Enterprise PySide6 Reporting View featuring asynchronous database querying,
-SOC2 / ISO 27001 audit export options, responsive viewport scrolling,
-and robust 22-feature flow fingerprint logging.
+SOC ANALYST MAP (22 features):
+  * "Generate Forensic Report" saves a .txt/.md containing:
+      Section 3  incident table  (ID | time | IPs | proto | enc | severity | MAE | FEAT n/22 | verdict)
+      Section 4  ALL 22 features for EVERY alert, grouped and numbered 00-21
+      Section 5  SOC navigation guide (where to look for each packet)
+  * The ID column equals the ID in Alert History -> look the packet up there.
+  * Missing features print "n/a" (never a fake 0).
+  * The FEATURE SCHEMA card shows how many recent alerts hold a full 22/22 vector.
+  * Feature names/order: src/database/feature_schema.py
 """
 
 import os
-import json
+from collections import Counter
 from datetime import datetime
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QPushButton, QFrame,
@@ -17,7 +23,11 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Slot, QThread, Signal, QObject
 
 from src.database.connection import SessionLocal
-from sqlalchemy import text, inspect
+from src.database.models import NetworkAlert
+from src.database.feature_schema import (
+    DEFAULT_THRESHOLD, FEATURE_COUNT, SOC_NAVIGATION_GUIDE,
+    completeness_text, count_present, extract_features, render_feature_lines,
+)
 
 from theme import (
     C_BG_APP, C_BG_PANEL, C_BG_SURFACE, C_BORDER, C_BORDER_LT,
@@ -28,17 +38,21 @@ from theme import (
     QSS_BASE, QSS_BTN_PRIMARY
 )
 
-FEATURE_NAMES = [
-    "flow_duration", "fwd_iat_mean", "fwd_iat_std", "fwd_iat_min", "fwd_iat_max",
-    "fwd_iat_total", "fwd_pkt_len_mean", "fwd_pkt_len_std", "fwd_pkt_len_min",
-    "fwd_pkt_len_max", "total_fwd_bytes", "flow_pkts_per_sec", "flow_bytes_per_sec",
-    "pkt_len_variance", "burst_ratio", "active_time_ratio", "pkt_count",
-    "unique_ttl_count", "ttl_mean", "tcp_flag_ratio", "has_udp", "has_tcp",
-]
+RULE = "═" * 70
+THIN = "─" * 70
+
+
+def _verdict(alert: NetworkAlert) -> str:
+    """FP if flagged; TP only once an analyst has reviewed; otherwise Pending."""
+    if alert.is_false_positive:
+        return "Verified FP"
+    if alert.analyst_comment is not None:
+        return "Verified TP"
+    return "Pending"
 
 
 class ForensicReportWorker(QObject):
-    """Background worker executing asynchronous database queries and report generation."""
+    """Background worker executing database queries and report generation."""
     finished = Signal(str, str)  # Payload, default filename
     failed = Signal(str)
 
@@ -46,100 +60,122 @@ class ForensicReportWorker(QObject):
     def process_report(self):
         db = SessionLocal()
         try:
-            raw_result = db.execute(text("SELECT * FROM alerts")).fetchall()
-            total = len(raw_result)
+            alerts = db.query(NetworkAlert).order_by(NetworkAlert.id.asc()).all()
+            total = len(alerts)
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             if total == 0:
-                report = self._build_empty_report(ts)
-                self.finished.emit(report, "HIDS_Empty_Report.txt")
+                self.finished.emit(self._build_empty_report(ts), "HIDS_Empty_Report.txt")
                 return
 
-            inspector = inspect(db.bind)
-            columns = [c["name"] for c in inspector.get_columns("alerts")]
-
-            def get_val(row, keys):
-                for k in keys:
-                    if k in columns:
-                        if hasattr(row, "_mapping"):
-                            return row._mapping.get(k)
-                        return getattr(row, k, None)
-                return None
-
-            tp = fp = unclassified = 0
-            encrypted_count = plaintext_count = 0
+            verdicts = Counter()
+            sev_counts = Counter()
+            enc = plain = 0
+            full_vec = partial_vec = no_vec = 0
             scores = []
-            rows_txt = ""
+            table_rows = []
+            detail_blocks = []
 
-            for idx, row in enumerate(raw_result, 1):
-                src = get_val(row, ["src_ip", "source_ip", "src"]) or "unknown"
-                dst = get_val(row, ["dst_ip", "dest_ip", "destination_ip", "dst"]) or "unknown"
-                proto = get_val(row, ["protocol", "proto"]) or "IP"
-                enc = get_val(row, ["is_encrypted"])
-                score_val = get_val(row, ["score", "mse_score", "reconstruction_error", "mse_value"])
-                is_fp = get_val(row, ["is_false_positive", "is_fp", "false_positive"])
-
-                if score_val is not None:
-                    scores.append(float(score_val))
-
-                if enc in (1, True):
-                    encrypted_count += 1
-                elif enc in (0, False):
-                    plaintext_count += 1
-
-                if is_fp in (1, True):
-                    verdict = "Verified FP"
-                    fp += 1
-                elif is_fp in (0, False):
-                    verdict = "Verified TP"
-                    tp += 1
+            for a in alerts:
+                values = extract_features(a.flow_features)
+                n = count_present(values)
+                if n == FEATURE_COUNT:
+                    full_vec += 1
+                elif n > 0:
+                    partial_vec += 1
                 else:
-                    verdict = "Unchecked"
-                    unclassified += 1
+                    no_vec += 1
 
-                score_str = f"{float(score_val):.4f}" if score_val is not None else "0.0000"
-                enc_str = "Y" if enc in (1, True) else "n"
+                verdict = _verdict(a)
+                verdicts[verdict] += 1
+                sev_counts[a.severity] += 1
+                if a.is_encrypted:
+                    enc += 1
+                else:
+                    plain += 1
+                if a.reconstruction_error is not None:
+                    scores.append(float(a.reconstruction_error))
 
-                rows_txt += (
-                    f"{idx:<6} | {str(src):<15} | {str(dst):<15} | {str(proto):<8} | "
-                    f"{enc_str:<3} | {score_str:<10} | {verdict:<12}\n"
+                when = a.timestamp.strftime("%Y-%m-%d %H:%M:%S") if a.timestamp else "n/a"
+                src = a.source_ip or "unknown"
+                dst = a.dest_ip or "unknown"
+                proto = a.protocol or "IP"
+                mae = float(a.reconstruction_error or 0.0)
+                tau = float(a.threshold_at_time or DEFAULT_THRESHOLD)
+
+                table_rows.append(
+                    f"{a.id:<6} | {when:<19} | {str(src):<15} | {str(dst):<15} | {str(proto):<8} | "
+                    f"{'Y' if a.is_encrypted else 'n':<3} | {str(a.severity):<8} | {mae:<10.4f} | "
+                    f"{completeness_text(values):<5} | {verdict}"
                 )
 
-                feat_json = get_val(row, ["features", "feature_vector", "payload"])
-                if feat_json:
-                    rows_txt += self._format_feature_snapshot(feat_json)
+                sp = f":{a.source_port}" if a.source_port else ""
+                dp = f":{a.dest_port}" if a.dest_port else ""
+                block = [
+                    THIN,
+                    f"ALERT #{a.id}   [{a.severity}]   {when}",
+                    f"  Connection   : {src}{sp}  →  {dst}{dp}  ({proto})   Encrypted: {'Yes' if a.is_encrypted else 'No'}",
+                    f"  MAE / tau    : {mae:.6f} / {tau:.6f}",
+                    f"  Verdict      : {verdict}",
+                    f"  Analyst note : {a.analyst_comment if a.analyst_comment else '—'}",
+                    f"  22-FEATURE VECTOR — {completeness_text(values)} captured",
+                ]
+                block.extend(render_feature_lines(values, indent="  "))
+                if n < FEATURE_COUNT:
+                    block.append(f"  ⚠ {FEATURE_COUNT - n} feature(s) not captured (n/a) — check parser.py / MonitorService.")
+                block.append("")
+                detail_blocks.append("\n".join(block))
 
             avg_mse = sum(scores) / len(scores) if scores else 0.0
+            sev_line = "  ".join(f"{k}: {sev_counts.get(k, 0)}" for k in ("Critical", "High", "Medium", "Low"))
+            header = (
+                f"{'ID':<6} | {'Time':<19} | {'Source IP':<15} | {'Dest IP':<15} | {'Proto':<8} | "
+                f"{'Enc':<3} | {'Severity':<8} | {'MAE Score':<10} | {'Feat':<5} | Verdict"
+            )
+            detail_blocks_text = "\n".join(detail_blocks)
+            nav = "\n".join(f"  • {where}\n      {what}" for where, what in SOC_NAVIGATION_GUIDE)
 
-            report = f"""══════════════════════════════════════════════════════════════════════
+            report = f"""{RULE}
 AUTOENCODER-HIDS SENTINEL CONSOLE  |  FORENSIC COMPLIANCE AUDIT
-══════════════════════════════════════════════════════════════════════
+{RULE}
 Generated On         : {ts}
 Classification       : INTERNAL USE ONLY
 
 1. EXECUTIVE SUMMARY
-──────────────────────────────────────────────────────────────────────
+{THIN}
 Total Anomalous Flows Captured    : {total}
-Confirmed True Threat Vectors     : {tp}
-Verified False Positives          : {fp}
-Pending Analyst Review            : {unclassified}
+Severity Breakdown                : {sev_line}
+Verified True Positives           : {verdicts.get("Verified TP", 0)}
+Verified False Positives          : {verdicts.get("Verified FP", 0)}
+Pending Analyst Review            : {verdicts.get("Pending", 0)}
 Average Flow Reconstruction MAE   : {avg_mse:.6f}
-Encrypted (TLS / HTTPS-class)     : {encrypted_count}
-Plaintext                         : {plaintext_count}
+Encrypted (TLS / HTTPS-class)     : {enc}
+Plaintext                         : {plain}
+Feature Vectors Complete (22/22)  : {full_vec}
+Feature Vectors Partial           : {partial_vec}
+Feature Vectors Missing           : {no_vec}
 
 2. MODEL CONFIGURATION
-──────────────────────────────────────────────────────────────────────
-Feature Schema          : 22 flow-based behavioral metrics  (L3/L4 only)
+{THIN}
+Feature Schema          : {FEATURE_COUNT} flow-based behavioral metrics  (L3/L4 only)
 Architecture            : 22 → 16 → 8 → 4 → 8 → 16 → 22  (Autoencoder)
-Default Threshold (tau) : 0.4313  (μ + 2σ — see /ready for live value)
+Default Threshold (tau) : {DEFAULT_THRESHOLD}  (μ + 2σ — see /ready for live value; per-alert tau shown in Section 4)
 Database Pipeline       : SYNCED / OPERATIONAL
 
 3. HISTORICAL INCIDENT LOG
-──────────────────────────────────────────────────────────────────────
-{'ID':<6} | {'Source IP':<15} | {'Dest IP':<15} | {'Proto':<8} | {'Enc':<3} | {'MAE Score':<10} | {'Verdict':<12}
-{'─'*74}
-{rows_txt}
-══════════════════════════════════════════════════════════════════════
+{THIN}
+{header}
+{"─" * len(header)}
+{chr(10).join(table_rows)}
+
+4. PER-ALERT 22-FEATURE FORENSIC DETAIL
+   (Alert IDs match the ID column in Alert History)
+{detail_blocks_text}
+5. SOC ANALYST NAVIGATION GUIDE
+{THIN}
+{nav}
+
+{RULE}
 END OF FORENSIC AUDIT REPORT
 """
             self.finished.emit(report, "HIDS_Compliance_Report.txt")
@@ -149,28 +185,16 @@ END OF FORENSIC AUDIT REPORT
         finally:
             db.close()
 
-    def _format_feature_snapshot(self, feat_json) -> str:
-        try:
-            data = feat_json if isinstance(feat_json, dict) else json.loads(feat_json)
-        except Exception:
-            return ""
-        lines = ["         ├─ 22-feature snapshot:"]
-        for name in FEATURE_NAMES:
-            if name in data:
-                lines.append(f"         │    {name:<22} = {data[name]}")
-        lines.append("")
-        return "\n".join(lines) + "\n"
-
     def _build_empty_report(self, timestamp: str) -> str:
-        return f"""══════════════════════════════════════════════════════════════════════
+        return f"""{RULE}
 AUTOENCODER-HIDS SENTINEL CONSOLE  |  FORENSIC COMPLIANCE AUDIT
-══════════════════════════════════════════════════════════════════════
+{RULE}
 Generated On   : {timestamp}
 Classification : INTERNAL USE ONLY
 
 NOTICE: No historical incident records found in storage.
 Database is empty — pending initial packet capture ingestion.
-══════════════════════════════════════════════════════════════════════
+{RULE}
 """
 
 
@@ -255,7 +279,7 @@ class ReportsPage(QWidget):
 
         self._metric_card(grid, 0, 0, "COMPLIANCE STATUS", "AUDIT READY", C_GREEN)
         self._metric_card(grid, 0, 1, "TARGET STANDARD", "SOC2 / ISO27001", C_AMBER)
-        self._metric_card(grid, 0, 2, "FEATURE SCHEMA", "22 / 22 logged", C_ACCENT_LT)
+        self.schema_card_val = self._metric_card(grid, 0, 2, "FEATURE SCHEMA", "22 / 22 schema", C_ACCENT_LT)
 
         self.root.addLayout(grid)
 
@@ -275,8 +299,9 @@ class ReportsPage(QWidget):
         desc_text = QLabel(
             "Exports a timestamped compliance audit document including cumulative "
             "incident totals, confirmed threat vectors, average reconstruction MAE, "
-            "per-alert IP / protocol / encryption status, and a full 22-feature "
-            "behavioral snapshot for every flagged flow."
+            "per-alert IP / protocol / encryption status / severity, a full 22-feature "
+            "behavioral snapshot for every flagged flow (Section 4), and a SOC navigation "
+            "guide. Alert IDs match the Alert History page."
         )
         desc_text.setWordWrap(True)
         desc_text.setStyleSheet(
@@ -338,6 +363,7 @@ class ReportsPage(QWidget):
             "Output format: plain text (.txt) or Markdown (.md)",
             "Classification: INTERNAL USE ONLY — SOC2 Type II compliant",
             "Schema: 22-feature behavioral fingerprint (L3/L4 only, zero-decryption)",
+            "Find a packet: note its ID in Section 3 -> Alert History -> select ID -> 22-Feature Forensic Inspector",
         ]
 
         for note in notes:
@@ -348,6 +374,32 @@ class ReportsPage(QWidget):
             notes_layout.addWidget(lbl)
 
         self.root.addWidget(notes_card)
+
+    # ── Live schema-completeness card ──────────────────────────────────────────
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._refresh_schema_card()
+
+    def _refresh_schema_card(self):
+        """Shows how many of the latest 500 alerts hold a full 22/22 vector."""
+        db = SessionLocal()
+        try:
+            rows = (db.query(NetworkAlert.flow_features)
+                      .order_by(NetworkAlert.id.desc()).limit(500).all())
+            if not rows:
+                self.schema_card_val.setText("22 / 22 schema")
+                return
+            full = sum(1 for r in rows if count_present(extract_features(r[0])) == FEATURE_COUNT)
+            colour = C_GREEN if full == len(rows) else C_AMBER
+            self.schema_card_val.setText(f"{full}/{len(rows)} full 22/22")
+            self.schema_card_val.setStyleSheet(
+                f"color: {colour}; font-size: {FONT_SIZE_LG}; font-weight: 700; "
+                f"font-family: {FONT_MONO}; background: transparent;"
+            )
+        except Exception:
+            pass
+        finally:
+            db.close()
 
     # ── Reusable Component Factories ──────────────────────────────────────────
     def _card(self, accent: str) -> QFrame:
@@ -405,6 +457,7 @@ class ReportsPage(QWidget):
         v.addWidget(t)
         v.addWidget(val)
         grid.addWidget(card, row, col)
+        return val
 
     # ── Threaded Report Handler ───────────────────────────────────────────────
     @Slot()
@@ -416,22 +469,22 @@ class ReportsPage(QWidget):
         self.export_btn.setEnabled(False)
 
         # Offload file query to background worker thread
-        self.thread = QThread()
-        self.worker = ForensicReportWorker()
-        self.worker.moveToThread(self.thread)
+        self._thread = QThread()
+        self._worker = ForensicReportWorker()
+        self._worker.moveToThread(self._thread)
 
-        self.thread.started.connect(self.worker.process_report)
-        self.worker.finished.connect(self._on_report_generated)
-        self.worker.failed.connect(self._on_report_failed)
+        self._thread.started.connect(self._worker.process_report)
+        self._worker.finished.connect(self._on_report_generated)
+        self._worker.failed.connect(self._on_report_failed)
 
         # Cleanup hooks
-        self.worker.finished.connect(self.thread.quit)
-        self.worker.finished.connect(self.worker.deleteLater)
-        self.worker.failed.connect(self.thread.quit)
-        self.worker.failed.connect(self.worker.deleteLater)
-        self.thread.finished.connect(self.thread.deleteLater)
+        self._worker.finished.connect(self._thread.quit)
+        self._worker.finished.connect(self._worker.deleteLater)
+        self._worker.failed.connect(self._thread.quit)
+        self._worker.failed.connect(self._worker.deleteLater)
+        self._thread.finished.connect(self._thread.deleteLater)
 
-        self.thread.start()
+        self._thread.start()
 
     @Slot(str, str)
     def _on_report_generated(self, report_content: str, default_filename: str):
@@ -447,8 +500,11 @@ class ReportsPage(QWidget):
 
         if file_path:
             try:
+                content = report_content
+                if file_path.lower().endswith(".md"):
+                    content = "```text\n" + report_content + "\n```\n"   # keep column alignment in Markdown
                 with open(file_path, "w", encoding="utf-8") as f:
-                    f.write(report_content)
+                    f.write(content)
 
                 self.status_lbl.setStyleSheet(
                     f"color: {C_GREEN}; font-size: {FONT_SIZE_SM}; font-family: {FONT_MONO};"
